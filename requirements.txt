@@ -1,0 +1,6 @@
+yfinance>=0.2.40
+apscheduler>=3.10.4
+python-dotenv>=1.0.0
+requests>=2.31.0
+pandas>=2.1.0
+pytz>=2024.1

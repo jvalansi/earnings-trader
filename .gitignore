@@ -1,0 +1,7 @@
+.env
+data/positions.json
+data/trades_log.jsonl
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
