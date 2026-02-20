@@ -5,10 +5,10 @@ from typing import Literal
 import pytz
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from config import TRADING_MODE
+from config import TRADING_MODE, ALLOWED_EXCHANGES
 from data.earnings import get_earnings_calendar, get_earnings_surprise
 from data.prices import get_ohlcv, get_atr, get_ah_move, get_prior_runup
-from data.sector import get_sector_move
+from data.sector import get_sector_move, get_exchange
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
@@ -43,6 +43,11 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     for ticker in tickers:
         try:
+            exchange = get_exchange(ticker)
+            if exchange not in ALLOWED_EXCHANGES:
+                logger.debug(f"Skipping {ticker}: exchange '{exchange}' not in allowed list")
+                continue
+
             surprise = get_earnings_surprise(ticker, date=today)
             ah_move = get_ah_move(ticker, today)
             prior_runup = get_prior_runup(ticker)

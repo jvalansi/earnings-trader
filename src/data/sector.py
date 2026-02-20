@@ -22,6 +22,18 @@ SECTOR_ETF_MAP: dict[str, str] = {
 FALLBACK_ETF = "SPY"
 
 
+def get_exchange(ticker: str) -> str:
+    """Return the yfinance exchange code for a ticker (e.g. 'NYQ', 'NMS').
+
+    Returns empty string if exchange cannot be determined.
+    """
+    try:
+        return yf.Ticker(ticker).info.get("exchange", "")
+    except Exception as e:
+        logger.warning(f"Could not get exchange for {ticker}: {e}")
+        return ""
+
+
 def get_sector_etf(ticker: str) -> str:
     """Return the sector ETF symbol for a given stock (e.g. 'XLK', 'XLF').
 

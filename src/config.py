@@ -13,6 +13,17 @@ HOLD_DAYS = 10                # max trading days to hold a position
 MAX_POSITIONS = 5             # max concurrent open positions
 LOOKBACK_DAYS = 10            # days used for prior run-up calculation
 
+# --- Exchange filter (yfinance exchange codes for target US exchanges) ---
+ALLOWED_EXCHANGES: frozenset[str] = frozenset({
+    "NYQ",  # NYSE (XNYS)
+    "ASE",  # NYSE American (XASE)
+    "PCX",  # NYSE ARCA (ARCX)
+    "NMS",  # Nasdaq Global Select Market (XNGS)
+    "NGM",  # Nasdaq Global Market (XNMS)
+    "NCM",  # Nasdaq Capital Market (XNCM)
+    "BTS",  # Cboe BZX (BATS)
+})
+
 # --- Position sizing ---
 POSITION_SIZE_USD = 1000.0    # fixed dollar amount per trade
 
