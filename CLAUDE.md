@@ -13,3 +13,7 @@ git push
 ```
 
 Run this before any `git push` if the remote is not already authenticated.
+
+## Workflow
+
+Always commit **and push** after making changes. Never leave commits unpushed.
