@@ -83,15 +83,20 @@ A BUY signal requires **all** of the following:
 
 ```
 earnings-trader/
-├── data/
-│   ├── prices.py       # yfinance: OHLCV, ATR, AH move, run-up
-│   ├── earnings.py     # FMP: EPS/rev surprise, guidance
-│   └── sector.py       # yfinance: sector ETF % change
-├── state.py            # JSON-backed position store
-├── decision.py         # evaluate_entry() + evaluate_positions()
-├── execution.py        # place_order() + update_state()
-├── scheduler.py        # APScheduler: scan + update cycles
-├── config.py           # all thresholds and parameters
+├── src/
+│   ├── data/
+│   │   ├── prices.py       # yfinance: OHLCV, ATR, AH move, run-up
+│   │   ├── earnings.py     # FMP: EPS/rev surprise, guidance
+│   │   └── sector.py       # yfinance: sector ETF % change
+│   ├── config.py           # all thresholds and parameters
+│   ├── state.py            # JSON-backed position store
+│   ├── decision.py         # evaluate_entry() + evaluate_positions()
+│   ├── execution.py        # place_order() + update_state()
+│   ├── scheduler.py        # APScheduler: scan + update cycles
+│   └── main.py             # entry point
+├── data/                   # runtime data (gitignored)
+│   ├── positions.json
+│   └── trades_log.jsonl
 ├── requirements.txt
 └── README.md
 ```
@@ -364,7 +369,8 @@ LOOKBACK_DAYS        = 10     # days to check prior run-up
 git clone https://github.com/jvalansi/earnings-trader.git
 cd earnings-trader
 pip install -r requirements.txt
-cp .env.example .env   # add your FMP_API_KEY
+cp .env.example .env        # add your FMP_API_KEY
+PYTHONPATH=src python src/main.py
 ```
 
 ---

@@ -1,5 +1,23 @@
 # CLAUDE.md
 
+## Project Layout
+
+Source files live in `src/`. Always run from the project root with `PYTHONPATH=src`:
+
+```bash
+PYTHONPATH=src /home/ubuntu/miniconda3/bin/python src/main.py
+```
+
+For one-off checks:
+```bash
+cd /home/ubuntu/earnings-trader
+PYTHONPATH=src /home/ubuntu/miniconda3/bin/python -c "from data.prices import get_atr; print(get_atr('AAPL'))"
+```
+
+Runtime data files (`data/positions.json`, `data/trades_log.jsonl`) are created at the project root automatically.
+
+---
+
 ## GitHub Access
 
 The GitHub personal access token is stored in `~/.bashrc` as `$GITHUB_TOKEN`.
