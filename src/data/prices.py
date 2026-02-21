@@ -73,6 +73,43 @@ def get_ah_move(ticker: str, date: str) -> float:
     return (ah_close / reg_close) - 1.0
 
 
+def get_premarket_move(ticker: str, date: str) -> float:
+    """Return pre-market % move on the given date (last pre-market price vs prior regular close).
+
+    date format: 'YYYY-MM-DD'
+    Returns fractional change, e.g. 0.05 = +5%.
+    Note: yfinance 1m data is only available for the past 7 days.
+    """
+    tk = yf.Ticker(ticker)
+    date_dt = datetime.strptime(date, "%Y-%m-%d")
+    # Go back 5 days to capture prior close across weekends
+    start = (date_dt - timedelta(days=5)).strftime("%Y-%m-%d")
+    next_day = (date_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    df = tk.history(start=start, end=next_day, interval="1m", prepost=True)
+    if df.empty:
+        raise ValueError(f"No intraday data for {ticker}")
+
+    if df.index.tzinfo is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EASTERN)
+    else:
+        df.index = df.index.tz_convert(EASTERN)
+
+    date_naive = date_dt.date()
+    prior_regular = df[df.index.date < date_naive].between_time("09:30", "15:59")
+    if prior_regular.empty:
+        raise ValueError(f"No prior regular session data for {ticker}")
+    prior_close = float(prior_regular["Close"].iloc[-1])
+
+    date_data = df[df.index.date == date_naive]
+    premarket = date_data.between_time("04:00", "09:29")
+    if premarket.empty:
+        raise ValueError(f"No pre-market data for {ticker} on {date}")
+    pm_last = float(premarket["Close"].iloc[-1])
+
+    return (pm_last / prior_close) - 1.0
+
+
 def get_prior_runup(ticker: str, days: int = LOOKBACK_DAYS) -> float:
     """Return the % price change over the prior N trading days.
 

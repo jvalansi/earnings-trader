@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from config import POSITION_SIZE_USD, TRADES_LOG_FILE
+from notifier import notify
 from decision import EntrySignal, PositionAction
 from state import Position, add_position, remove_position, update_stop
 
@@ -98,6 +99,7 @@ def execute_signals(
             f"Opened position: {sig.ticker} @ {price:.2f}, "
             f"stop={sig.initial_stop:.2f}, qty={quantity}"
         )
+        notify(f"📈 *BUY {sig.ticker}* — {quantity} shares @ ${price:.2f} | stop ${sig.initial_stop:.2f}")
 
     # --- SELL / UPDATE_STOP: process position actions ---
     prices = current_prices or {}
@@ -114,6 +116,7 @@ def execute_signals(
             place_order(act.ticker, "sell", qty, fill_price=fill_price, mode=mode)
             remove_position(act.ticker)
             logger.info(f"Closed position: {act.ticker} @ {fill_price:.2f}, reason={act.reason}")
+            notify(f"📉 *SELL {act.ticker}* — {qty} shares @ ${fill_price:.2f} | reason: {act.reason}")
 
         elif act.action == "update_stop":
             update_stop(act.ticker, act.new_stop)

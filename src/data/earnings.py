@@ -72,11 +72,11 @@ def get_earnings_surprise(ticker: str, date: str | None = None) -> EarningsSurpr
     )
 
 
-def get_earnings_calendar(date: str) -> list[str]:
-    """Return list of ticker symbols reporting after market close on the given date.
+def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
+    """Return list of ticker symbols reporting on the given date.
 
     date format: 'YYYY-MM-DD'.
-    Filters for AMC (after market close) only — AH data is available at 4:15 PM.
+    timing: 'amc' (after market close, default) or 'bmo' (before market open).
     """
     url = f"{BASE_STABLE}/earnings-calendar"
     params = {"from": date, "to": date, "apikey": FMP_API_KEY}
@@ -87,10 +87,14 @@ def get_earnings_calendar(date: str) -> list[str]:
     tickers = []
     for r in records:
         time_val = r.get("time", "").lower()
-        if time_val in ("amc", ""):
+        if timing == "amc":
+            match = time_val in ("amc", "")
+        else:
+            match = time_val == timing
+        if match:
             symbol = r.get("symbol", "")
             if symbol:
                 tickers.append(symbol)
 
-    logger.info(f"Earnings calendar for {date}: {len(tickers)} AMC tickers")
+    logger.info(f"Earnings calendar for {date} ({timing}): {len(tickers)} tickers")
     return tickers
