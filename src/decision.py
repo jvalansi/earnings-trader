@@ -1,3 +1,14 @@
+"""
+Entry and position management logic. Pure functions — no side effects.
+
+    EntrySignal                             dataclass: ticker, should_enter, filters_passed, entry_price, initial_stop
+    PositionAction                          dataclass: ticker, action ('hold'|'sell'|'update_stop'), new_stop, reason
+
+    evaluate_entry(ticker, surprise, ah_move, prior_runup, sector_move,
+                   atr, current_price, open_positions) -> EntrySignal
+
+    evaluate_positions(positions, current_prices, current_atrs) -> list[PositionAction]
+"""
 from dataclasses import dataclass
 from typing import Literal
 

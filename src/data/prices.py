@@ -1,3 +1,15 @@
+"""
+Price data from yfinance. All % changes are fractional (0.05 = 5%).
+
+    get_ohlcv(ticker, days)          -> pd.DataFrame   columns: Open High Low Close Volume
+    get_atr(ticker, period=14)       -> float          Average True Range (Wilder smoothing)
+    get_ah_move(ticker, date)        -> float          after-hours % move vs regular close
+    get_premarket_move(ticker, date) -> float          pre-market % move vs prior regular close
+    get_prior_runup(ticker, days=10) -> float          % change over prior N trading days
+
+Note: yfinance 1m data (used by get_ah_move / get_premarket_move) is only available
+for the past 7 days.
+"""
 import logging
 from datetime import datetime, timedelta
 

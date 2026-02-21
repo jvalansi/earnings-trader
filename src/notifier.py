@@ -1,3 +1,10 @@
+"""
+Slack notifications. Silently no-ops if env vars are not set.
+
+    notify(text) -> None   post a message to SLACK_NOTIFY_CHANNEL
+
+Requires env vars: SLACK_BOT_TOKEN, SLACK_NOTIFY_CHANNEL
+"""
 import os
 import logging
 

@@ -1,3 +1,10 @@
+"""
+Sector ETF data via yfinance. Falls back to SPY for unknown sectors.
+
+    get_exchange(ticker)            -> str     yfinance exchange code (e.g. 'NMS', 'NYQ')
+    get_sector_etf(ticker)         -> str     sector ETF symbol (e.g. 'XLK', 'XLF')
+    get_sector_move(ticker, date)  -> float   sector ETF daily % change (fractional)
+"""
 import logging
 from datetime import datetime, timedelta
 

@@ -1,3 +1,14 @@
+"""
+JSON-backed position store. Reads/writes data/positions.json.
+
+    Position                        dataclass: ticker, entry_price, current_stop, entry_date, day_count, quantity
+
+    load_positions()                -> list[Position]
+    save_positions(positions)       -> None
+    add_position(position)          -> None   no-op if ticker already exists
+    remove_position(ticker)         -> None
+    update_stop(ticker, new_stop)   -> None
+"""
 import json
 import logging
 from dataclasses import dataclass, asdict, field

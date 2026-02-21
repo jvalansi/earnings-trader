@@ -1,3 +1,12 @@
+"""
+Earnings data from the Financial Modeling Prep (FMP) API.
+
+    EarningsSurprise                          dataclass with eps/rev beat pcts and guidance flag
+    get_earnings_surprise(ticker, date=None)  -> EarningsSurprise
+    get_earnings_calendar(date, timing='amc') -> list[str]   timing: 'amc' | 'bmo'
+
+Requires env var: FMP_API_KEY
+"""
 import logging
 from dataclasses import dataclass
 

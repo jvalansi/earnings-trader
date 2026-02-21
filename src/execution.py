@@ -1,3 +1,11 @@
+"""
+Order placement and trade logging. Supports paper mode; live mode raises NotImplementedError.
+
+    OrderResult                                                  dataclass: ticker, action, quantity, fill_price, timestamp, mode, success, error
+
+    place_order(ticker, action, quantity, fill_price, mode='paper') -> OrderResult
+    execute_signals(signals, actions, current_prices=None, mode='paper') -> None
+"""
 import json
 import logging
 from dataclasses import dataclass, asdict
