@@ -224,17 +224,26 @@ _US_TICKER_RE = re.compile(r"^[A-Z]{1,5}$")
 
 
 def _filter_us_exchange(tickers: list[str]) -> list[str]:
-    """Filter tickers to major US exchanges.
+    """Filter tickers to major US exchange equities.
 
     First pass: drop anything that doesn't look like a US ticker (1-5 uppercase letters).
-    Second pass: confirm remaining tickers are on an allowed exchange via yfinance lookup,
-    using a thread pool to parallelize the calls.
+    Second pass: confirm remaining tickers are on an allowed exchange and are equities
+    (not ETFs, funds, etc.) via yfinance lookup, using a thread pool to parallelize the calls.
     """
+    import yfinance as yf
+
     candidates = [t for t in tickers if _US_TICKER_RE.match(t)]
 
     def check(ticker: str) -> str | None:
-        exchange = get_exchange(ticker)
-        return ticker if exchange in ALLOWED_EXCHANGES else None
+        try:
+            info = yf.Ticker(ticker).info
+            exchange = info.get("exchange", "")
+            quote_type = info.get("quoteType", "")
+            if exchange in ALLOWED_EXCHANGES and quote_type == "EQUITY":
+                return ticker
+        except Exception as e:
+            logger.warning(f"Could not get info for {ticker}: {e}")
+        return None
 
     results = []
     with ThreadPoolExecutor(max_workers=20) as pool:
