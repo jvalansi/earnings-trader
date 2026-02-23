@@ -21,9 +21,9 @@ EASTERN = pytz.timezone("US/Eastern")
 
 
 def run_scan_cycle(mode: str = "paper") -> None:
-    """4:15 PM ET — scan today's AMC earnings for entry signals.
+    """4:15 PM ET — scan today's earnings for entry signals using AH move.
 
-    1. Fetch today's earnings calendar (AMC tickers only)
+    1. Fetch today's full earnings calendar
     2. For each ticker: fetch surprise, AH move, prior run-up, sector move, ATR
     3. Evaluate entry signal against all 6 filters
     4. Execute BUY orders for passing signals
@@ -32,13 +32,13 @@ def run_scan_cycle(mode: str = "paper") -> None:
     logger.info(f"=== Scan Cycle: {today} ===")
 
     try:
-        tickers = get_earnings_calendar(today)
+        tickers = get_earnings_calendar(today, timing="all")
     except Exception as e:
         logger.error(f"Failed to fetch earnings calendar: {e}", exc_info=True)
         return
 
     if not tickers:
-        logger.info("No AMC earnings today.")
+        logger.info("No earnings today.")
         return
 
     open_positions = load_positions()
@@ -80,7 +80,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     # Slack summary
     if signals:
-        lines = [f"*Earnings Scan — {today}* ({len(tickers)} AMC tickers)"]
+        lines = [f"*Earnings Scan — {today}* ({len(tickers)} tickers)"]
         for sig in signals:
             checks = " ".join(
                 ("✅" if v else "❌") + f" {k}" for k, v in sig.filters_passed.items()
@@ -95,10 +95,10 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
 
 def run_bmo_scan_cycle(mode: str = "paper") -> None:
-    """9:00 AM ET — scan today's BMO earnings for entry signals.
+    """9:00 AM ET — scan today's earnings for entry signals using pre-market move.
 
     Mirrors run_scan_cycle but uses pre-market move instead of AH move.
-    1. Fetch today's earnings calendar (BMO tickers only)
+    1. Fetch today's full earnings calendar
     2. For each ticker: fetch surprise, pre-market move, prior run-up, sector move, ATR
     3. Evaluate entry signal against all 6 filters
     4. Execute BUY orders for passing signals
@@ -107,13 +107,13 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
     logger.info(f"=== BMO Scan Cycle: {today} ===")
 
     try:
-        tickers = get_earnings_calendar(today, timing="bmo")
+        tickers = get_earnings_calendar(today, timing="all")
     except Exception as e:
         logger.error(f"Failed to fetch BMO earnings calendar: {e}", exc_info=True)
         return
 
     if not tickers:
-        logger.info("No BMO earnings today.")
+        logger.info("No earnings today.")
         return
 
     open_positions = load_positions()
@@ -155,7 +155,7 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
 
     # Slack summary
     if signals:
-        lines = [f"*BMO Earnings Scan — {today}* ({len(tickers)} BMO tickers)"]
+        lines = [f"*BMO Earnings Scan — {today}* ({len(tickers)} tickers)"]
         for sig in signals:
             checks = " ".join(
                 ("✅" if v else "❌") + f" {k}" for k, v in sig.filters_passed.items()
