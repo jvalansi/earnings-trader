@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 
 import pytz
@@ -218,6 +218,35 @@ def run_update_cycle(mode: str = "paper") -> None:
     notify("\n".join(lines))
 
 
+def run_calendar_preview() -> None:
+    """7:00 PM ET — post tomorrow's earnings calendar to Slack."""
+    tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+    logger.info(f"=== Calendar Preview: {tomorrow} ===")
+
+    try:
+        bmo_tickers = get_earnings_calendar(tomorrow, timing="bmo")
+    except Exception as e:
+        logger.error(f"Failed to fetch BMO calendar for {tomorrow}: {e}", exc_info=True)
+        bmo_tickers = []
+
+    try:
+        amc_tickers = get_earnings_calendar(tomorrow, timing="amc")
+    except Exception as e:
+        logger.error(f"Failed to fetch AMC calendar for {tomorrow}: {e}", exc_info=True)
+        amc_tickers = []
+
+    lines = [f"*Earnings Calendar — {tomorrow}*"]
+    if bmo_tickers:
+        lines.append(f"🌅 *BMO ({len(bmo_tickers)}):* {', '.join(bmo_tickers)}")
+    else:
+        lines.append("🌅 *BMO:* none")
+    if amc_tickers:
+        lines.append(f"🌆 *AMC ({len(amc_tickers)}):* {', '.join(amc_tickers)}")
+    else:
+        lines.append("🌆 *AMC:* none")
+    notify("\n".join(lines))
+
+
 def start(mode: Literal["paper", "live"] = "paper") -> None:
     """Start the APScheduler blocking event loop. Registers both daily cycles."""
     logging.basicConfig(
@@ -253,9 +282,18 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         id="update_cycle",
         name="Position Update @ 4:30 PM ET",
     )
+    scheduler.add_job(
+        run_calendar_preview,
+        trigger="cron",
+        hour=19,
+        minute=0,
+        id="calendar_preview",
+        name="Calendar Preview @ 7:00 PM ET",
+    )
 
     logger.info(f"Scheduler starting in {mode!r} mode.")
-    logger.info("  BMO scan:     9:00 AM ET (pre-market move + evaluate entries)")
-    logger.info("  Scan cycle:   4:15 PM ET (fetch earnings + evaluate entries)")
-    logger.info("  Update cycle: 4:30 PM ET (manage open positions)")
+    logger.info("  BMO scan:         9:00 AM ET (pre-market move + evaluate entries)")
+    logger.info("  Scan cycle:       4:15 PM ET (fetch earnings + evaluate entries)")
+    logger.info("  Update cycle:     4:30 PM ET (manage open positions)")
+    logger.info("  Calendar preview: 7:00 PM ET (tomorrow's earnings calendar)")
     scheduler.start()
