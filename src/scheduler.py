@@ -1,4 +1,6 @@
 import logging
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import Literal
 
@@ -218,19 +220,46 @@ def run_update_cycle(mode: str = "paper") -> None:
     notify("\n".join(lines))
 
 
+_US_TICKER_RE = re.compile(r"^[A-Z]{1,5}$")
+
+
+def _filter_us_exchange(tickers: list[str]) -> list[str]:
+    """Filter tickers to major US exchanges.
+
+    First pass: drop anything that doesn't look like a US ticker (1-5 uppercase letters).
+    Second pass: confirm remaining tickers are on an allowed exchange via yfinance lookup,
+    using a thread pool to parallelize the calls.
+    """
+    candidates = [t for t in tickers if _US_TICKER_RE.match(t)]
+
+    def check(ticker: str) -> str | None:
+        exchange = get_exchange(ticker)
+        return ticker if exchange in ALLOWED_EXCHANGES else None
+
+    results = []
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futures = {pool.submit(check, t): t for t in candidates}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                results.append(result)
+
+    return sorted(results)
+
+
 def run_calendar_preview() -> None:
     """7:00 PM ET — post tomorrow's earnings calendar to Slack."""
     tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
     logger.info(f"=== Calendar Preview: {tomorrow} ===")
 
     try:
-        bmo_tickers = get_earnings_calendar(tomorrow, timing="bmo")
+        bmo_tickers = _filter_us_exchange(get_earnings_calendar(tomorrow, timing="bmo"))
     except Exception as e:
         logger.error(f"Failed to fetch BMO calendar for {tomorrow}: {e}", exc_info=True)
         bmo_tickers = []
 
     try:
-        amc_tickers = get_earnings_calendar(tomorrow, timing="amc")
+        amc_tickers = _filter_us_exchange(get_earnings_calendar(tomorrow, timing="amc"))
     except Exception as e:
         logger.error(f"Failed to fetch AMC calendar for {tomorrow}: {e}", exc_info=True)
         amc_tickers = []
