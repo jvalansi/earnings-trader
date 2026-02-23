@@ -253,26 +253,16 @@ def run_calendar_preview() -> None:
     logger.info(f"=== Calendar Preview: {tomorrow} ===")
 
     try:
-        bmo_tickers = _filter_us_exchange(get_earnings_calendar(tomorrow, timing="bmo"))
+        tickers = _filter_us_exchange(get_earnings_calendar(tomorrow, timing="all"))
     except Exception as e:
-        logger.error(f"Failed to fetch BMO calendar for {tomorrow}: {e}", exc_info=True)
-        bmo_tickers = []
-
-    try:
-        amc_tickers = _filter_us_exchange(get_earnings_calendar(tomorrow, timing="amc"))
-    except Exception as e:
-        logger.error(f"Failed to fetch AMC calendar for {tomorrow}: {e}", exc_info=True)
-        amc_tickers = []
+        logger.error(f"Failed to fetch calendar for {tomorrow}: {e}", exc_info=True)
+        tickers = []
 
     lines = [f"*Earnings Calendar — {tomorrow}*"]
-    if bmo_tickers:
-        lines.append(f"🌅 *BMO ({len(bmo_tickers)}):* {', '.join(bmo_tickers)}")
+    if tickers:
+        lines.append(f"{len(tickers)} reporting: {', '.join(tickers)}")
     else:
-        lines.append("🌅 *BMO:* none")
-    if amc_tickers:
-        lines.append(f"🌆 *AMC ({len(amc_tickers)}):* {', '.join(amc_tickers)}")
-    else:
-        lines.append("🌆 *AMC:* none")
+        lines.append("No earnings reporting.")
     notify("\n".join(lines))
 
 

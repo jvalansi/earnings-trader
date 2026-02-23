@@ -85,7 +85,7 @@ def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
     """Return list of ticker symbols reporting on the given date.
 
     date format: 'YYYY-MM-DD'.
-    timing: 'amc' (after market close, default) or 'bmo' (before market open).
+    timing: 'amc' (after market close, default), 'bmo' (before market open), or 'all'.
     """
     url = f"{BASE_STABLE}/earnings-calendar"
     params = {"from": date, "to": date, "apikey": FMP_API_KEY}
@@ -96,7 +96,9 @@ def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
     tickers = []
     for r in records:
         time_val = r.get("time", "").lower()
-        if timing == "amc":
+        if timing == "all":
+            match = True
+        elif timing == "amc":
             match = time_val in ("amc", "")
         else:
             match = time_val == timing
