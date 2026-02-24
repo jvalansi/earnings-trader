@@ -21,7 +21,9 @@ import os
 import sys
 from pathlib import Path
 
-from notion_client import Client
+import requests
+
+NOTION_VERSION = "2022-06-28"
 
 
 def main() -> None:
@@ -35,72 +37,77 @@ def main() -> None:
         print("Error: NOTION_PARENT_PAGE_ID env var not set", file=sys.stderr)
         sys.exit(1)
 
-    client = Client(auth=token)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": NOTION_VERSION,
+        "Content-Type": "application/json",
+    }
     parent = {"type": "page_id", "page_id": parent_page_id}
+
+    def create_db(title: str, properties: dict) -> str:
+        r = requests.post(
+            "https://api.notion.com/v1/databases",
+            headers=headers,
+            json={
+                "parent": parent,
+                "title": [{"text": {"content": title}}],
+                "properties": properties,
+            },
+        )
+        r.raise_for_status()
+        return r.json()["id"]
 
     print("Creating Notion databases...")
 
     # ── Earnings Scans ────────────────────────────────────────────────────────
-    scans_db = client.databases.create(
-        parent=parent,
-        title=[{"text": {"content": "Earnings Scans"}}],
-        properties={
-            "Ticker":       {"title": {}},
-            "Date":         {"date": {}},
-            "Type":         {"select": {"options": [
-                                {"name": "BMO", "color": "blue"},
-                                {"name": "AMC", "color": "orange"},
-                            ]}},
-            "Signal":       {"select": {"options": [
-                                {"name": "BUY",  "color": "green"},
-                                {"name": "skip", "color": "gray"},
-                            ]}},
-            "EPS Beat %":   {"number": {"format": "number"}},
-            "Move %":       {"number": {"format": "number"}},
-            "Entry Price":  {"number": {"format": "dollar"}},
-            "Stop Price":   {"number": {"format": "dollar"}},
-            "eps_beat":     {"checkbox": {}},
-            "rev_beat":     {"checkbox": {}},
-            "ah_move":      {"checkbox": {}},
-            "prior_runup":  {"checkbox": {}},
-            "sector_etf":   {"checkbox": {}},
-            "guidance":     {"checkbox": {}},
-            "capacity":     {"checkbox": {}},
-        },
-    )
-    print(f"  Earnings Scans:    {scans_db['id']}")
+    scans_id = create_db("Earnings Scans", {
+        "Ticker":       {"title": {}},
+        "Date":         {"date": {}},
+        "Type":         {"select": {"options": [
+                            {"name": "BMO", "color": "blue"},
+                            {"name": "AMC", "color": "orange"},
+                        ]}},
+        "Signal":       {"select": {"options": [
+                            {"name": "BUY",  "color": "green"},
+                            {"name": "skip", "color": "gray"},
+                        ]}},
+        "EPS Beat %":   {"number": {"format": "number"}},
+        "Move %":       {"number": {"format": "number"}},
+        "Entry Price":  {"number": {"format": "dollar"}},
+        "Stop Price":   {"number": {"format": "dollar"}},
+        "eps_beat":     {"checkbox": {}},
+        "rev_beat":     {"checkbox": {}},
+        "ah_move":      {"checkbox": {}},
+        "prior_runup":  {"checkbox": {}},
+        "sector_etf":   {"checkbox": {}},
+        "guidance":     {"checkbox": {}},
+        "capacity":     {"checkbox": {}},
+    })
+    print(f"  Earnings Scans:    {scans_id}")
 
     # ── Open Positions ────────────────────────────────────────────────────────
-    positions_db = client.databases.create(
-        parent=parent,
-        title=[{"text": {"content": "Open Positions"}}],
-        properties={
-            "Ticker":       {"title": {}},
-            "Entry Price":  {"number": {"format": "dollar"}},
-            "Entry Date":   {"date": {}},
-            "Stop":         {"number": {"format": "dollar"}},
-            "Day":          {"number": {"format": "number"}},
-            "Qty":          {"number": {"format": "number"}},
-        },
-    )
-    print(f"  Open Positions:    {positions_db['id']}")
+    positions_id = create_db("Open Positions", {
+        "Ticker":       {"title": {}},
+        "Entry Price":  {"number": {"format": "dollar"}},
+        "Entry Date":   {"date": {}},
+        "Stop":         {"number": {"format": "dollar"}},
+        "Day":          {"number": {"format": "number"}},
+        "Qty":          {"number": {"format": "number"}},
+    })
+    print(f"  Open Positions:    {positions_id}")
 
     # ── Earnings Calendar ─────────────────────────────────────────────────────
-    calendar_db = client.databases.create(
-        parent=parent,
-        title=[{"text": {"content": "Earnings Calendar"}}],
-        properties={
-            "Ticker": {"title": {}},
-            "Date":   {"date": {}},
-        },
-    )
-    print(f"  Earnings Calendar: {calendar_db['id']}")
+    calendar_id = create_db("Earnings Calendar", {
+        "Ticker": {"title": {}},
+        "Date":   {"date": {}},
+    })
+    print(f"  Earnings Calendar: {calendar_id}")
 
     # ── Save config ───────────────────────────────────────────────────────────
     config = {
-        "scans_db_id":     scans_db["id"],
-        "positions_db_id": positions_db["id"],
-        "calendar_db_id":  calendar_db["id"],
+        "scans_db_id":     scans_id,
+        "positions_db_id": positions_id,
+        "calendar_db_id":  calendar_id,
     }
 
     Path("data").mkdir(exist_ok=True)
