@@ -1,29 +1,74 @@
-# Dashboard Options — Comparison
+# Notion Integration
 
-| | Flask | Notion | Airtable | Google Sheets | GitHub TSV | Supabase | Datasette |
-|---|---|---|---|---|---|---|---|
-| **UI quality** | Custom (you build it) | Excellent | Excellent | Spreadsheet | Basic table renderer | Good | Dated but functional |
-| **Setup overhead** | High — Flask app + systemd service | Low — API key + `notion-client` | Low — API key + `pyairtable` | Very low — `gspread` | Zero | Low — project + Python client | Medium — self-host or Datasette Cloud |
-| **Python update method** | Write JSON files | Notion API (create/update pages) | Airtable REST API | `gspread` | `git commit && git push` | `supabase-py` or REST | Rebuild SQLite file + re-deploy |
-| **Auto-refresh** | Yes (meta refresh) | No (manual reload) | No (manual reload) | No (manual reload) | No (manual reload) | No (manual reload) | No (manual reload) |
-| **Live prices** | Yes (yfinance on load) | No (snapshot at cycle time) | No | No | No | No | No |
-| **Free tier** | Self-hosted (free) | Yes (generous) | Yes (1,000 rows/base) | Yes | Yes | Yes (500MB DB) | Yes (self-host) / paid cloud |
-| **External dependency** | No | Yes | Yes | Yes | No (just GitHub) | Yes | Yes (if cloud) |
-| **Data history / audit trail** | Manual | Built-in (page history) | Built-in (revision history) | Built-in (version history) | Git history (free) | Full DB history | File-based |
-| **Filtering / sorting** | Custom | Yes | Yes | Basic | No | Yes | Yes |
-| **Mobile friendly** | Depends on your HTML | Yes | Yes | Partial | Poor | Yes | Partial |
-| **Other integrations** | None built-in | Huge ecosystem | Good ecosystem | Google ecosystem | GitHub ecosystem | Postgres ecosystem | Limited |
-| **Verdict** | Most control, most work | Best all-round if already using Notion | Best pure table UI | Simplest to code | Zero overhead, no frills | Good if you want a real DB | Promising but behind |
+Scan results, open positions, and earnings calendar are pushed to Notion after each scheduler cycle. Slack keeps buy/sell trade alerts only.
 
----
+## Notion Databases
 
-## Recommendation
+Three databases are created in a Notion page of your choice:
 
-**If you're already using or planning to use Notion for other things → use Notion.**
-The API is straightforward, the UI is the best of any option, and the integration cost is effectively zero if you're in that ecosystem anyway.
+| Database | Populated at | Contents |
+|---|---|---|
+| Earnings Scans | 9 AM (BMO) + 4:15 PM (AMC) | One row per ticker: all 7 filters, signal, EPS beat %, move % |
+| Open Positions | 4:30 PM | One row per open position, upserted each cycle, archived on close |
+| Earnings Calendar | 7:00 PM | One row per ticker reporting tomorrow |
 
-**If you want absolute zero overhead → GitHub TSV.**
-No credentials, no external service, data lives in the repo forever.
+## Setup
 
-**If you want a real queryable database with a decent UI → Supabase.**
-Free tier is plenty for this volume, and you get full SQL if you ever need it.
+### 1. Create a Notion integration
+
+Go to https://www.notion.so/my-integrations → New integration → copy the token.
+
+### 2. Create a Notion page and share it
+
+Create a page in Notion (e.g. "Earnings Trader"), then share it with your integration via the `...` menu → Connections.
+
+Get the page ID from the URL — it's the last part:
+```
+https://www.notion.so/My-Page-<page-id>
+```
+
+### 3. Install the dependency
+
+```bash
+/home/ubuntu/miniconda3/envs/earnings-trader/bin/pip install notion-client
+```
+
+### 4. Run the setup script (once)
+
+```bash
+cd /home/ubuntu/earnings-trader
+NOTION_TOKEN=secret_xxx NOTION_PARENT_PAGE_ID=<page-id> python src/setup_notion.py
+```
+
+This creates the three databases inside your page and saves their IDs to `data/notion_config.json`.
+
+### 5. Add NOTION_TOKEN to the service environment
+
+Add to `/etc/systemd/system/earnings-trader.service`:
+```ini
+Environment=NOTION_TOKEN=secret_xxx
+```
+
+Then reload:
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart earnings-trader
+```
+
+## Files Added / Modified
+
+| File | Change |
+|---|---|
+| `src/notion_reporter.py` | New — Notion API wrapper (`write_scan`, `sync_positions`, `write_calendar`) |
+| `src/setup_notion.py` | New — one-time setup script to create databases |
+| `src/scheduler.py` | Modified — calls `notion_reporter` at end of each cycle |
+| `requirements.txt` | Modified — added `notion-client>=2.2.1` |
+| `data/notion_config.json` | Created at runtime by `setup_notion.py` — holds database IDs |
+
+## How it works
+
+- If `NOTION_TOKEN` is not set, all Notion calls are silently skipped (no crash)
+- If `data/notion_config.json` is missing, a warning is logged and calls are skipped
+- All Notion API calls are wrapped in try/except — a Notion failure never blocks Slack or the scheduler
+- Positions are upserted by ticker name (updated if exists, created if new, archived if closed)
+- Scan rows are appended each cycle (one row per ticker per run)
+- Calendar rows are appended each preview cycle

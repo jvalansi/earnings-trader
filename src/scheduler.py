@@ -15,6 +15,7 @@ from data.sector import get_sector_move, get_exchange
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
+import notion_reporter
 
 logger = logging.getLogger(__name__)
 EASTERN = pytz.timezone("US/Eastern")
@@ -43,6 +44,8 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     open_positions = load_positions()
     signals = []
+    move_pcts: dict[str, float] = {}
+    eps_beat_pcts: dict[str, float] = {}
 
     for ticker in tickers:
         try:
@@ -70,6 +73,8 @@ def run_scan_cycle(mode: str = "paper") -> None:
                 open_positions=open_positions,
             )
             signals.append(sig)
+            move_pcts[ticker] = ah_move
+            eps_beat_pcts[ticker] = surprise.eps_beat_pct
             logger.info(f"{ticker}: should_enter={sig.should_enter}, filters={sig.filters_passed}")
 
         except Exception as e:
@@ -92,6 +97,11 @@ def run_scan_cycle(mode: str = "paper") -> None:
         notify("\n".join(lines))
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
+
+    try:
+        notion_reporter.write_scan("AMC", today, signals, move_pcts, eps_beat_pcts)
+    except Exception as e:
+        logger.error(f"Notion: failed to write AMC scan: {e}", exc_info=True)
 
 
 def run_bmo_scan_cycle(mode: str = "paper") -> None:
@@ -118,6 +128,8 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
 
     open_positions = load_positions()
     signals = []
+    move_pcts: dict[str, float] = {}
+    eps_beat_pcts: dict[str, float] = {}
 
     for ticker in tickers:
         try:
@@ -145,6 +157,8 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
                 open_positions=open_positions,
             )
             signals.append(sig)
+            move_pcts[ticker] = pm_move
+            eps_beat_pcts[ticker] = surprise.eps_beat_pct
             logger.info(f"{ticker}: should_enter={sig.should_enter}, filters={sig.filters_passed}")
 
         except Exception as e:
@@ -167,6 +181,11 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
         notify("\n".join(lines))
     else:
         notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
+
+    try:
+        notion_reporter.write_scan("BMO", today, signals, move_pcts, eps_beat_pcts)
+    except Exception as e:
+        logger.error(f"Notion: failed to write BMO scan: {e}", exc_info=True)
 
 
 def run_update_cycle(mode: str = "paper") -> None:
@@ -202,6 +221,11 @@ def run_update_cycle(mode: str = "paper") -> None:
 
     actions = evaluate_positions(positions, current_prices, current_atrs)
     execute_signals([], actions, current_prices=current_prices, mode=mode)
+
+    try:
+        notion_reporter.sync_positions(load_positions())
+    except Exception as e:
+        logger.error(f"Notion: failed to sync positions: {e}", exc_info=True)
 
     # Slack summary
     today = datetime.now(EASTERN).strftime("%Y-%m-%d")
@@ -273,6 +297,11 @@ def run_calendar_preview() -> None:
     else:
         lines.append("No earnings reporting.")
     notify("\n".join(lines))
+
+    try:
+        notion_reporter.write_calendar(tomorrow, tickers)
+    except Exception as e:
+        logger.error(f"Notion: failed to write calendar: {e}", exc_info=True)
 
 
 def start(mode: Literal["paper", "live"] = "paper") -> None:
