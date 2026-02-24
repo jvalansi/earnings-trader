@@ -287,6 +287,8 @@ def run_calendar_preview() -> None:
 
     try:
         all_entries = get_earnings_calendar_details(tomorrow)
+        # Only keep entries that have analyst EPS estimates — required for beat evaluation
+        all_entries = [e for e in all_entries if e.eps_estimate is not None]
         valid_tickers = set(_filter_us_exchange([e.ticker for e in all_entries]))
         entries = [e for e in all_entries if e.ticker in valid_tickers]
         tickers = sorted(valid_tickers)
