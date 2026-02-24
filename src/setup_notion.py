@@ -36,7 +36,7 @@ def main() -> None:
         sys.exit(1)
 
     client = Client(auth=token)
-    parent = {"page_id": parent_page_id}
+    parent = {"type": "page_id", "page_id": parent_page_id}
 
     print("Creating Notion databases...")
 
