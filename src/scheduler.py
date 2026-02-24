@@ -1,7 +1,7 @@
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from typing import Literal
 
 import pytz
@@ -28,7 +28,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
     3. Evaluate entry signal against all 6 filters
     4. Execute BUY orders for passing signals
     """
-    today = date.today().strftime("%Y-%m-%d")
+    today = datetime.now(EASTERN).strftime("%Y-%m-%d")
     logger.info(f"=== Scan Cycle: {today} ===")
 
     try:
@@ -103,7 +103,7 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
     3. Evaluate entry signal against all 6 filters
     4. Execute BUY orders for passing signals
     """
-    today = date.today().strftime("%Y-%m-%d")
+    today = datetime.now(EASTERN).strftime("%Y-%m-%d")
     logger.info(f"=== BMO Scan Cycle: {today} ===")
 
     try:
@@ -204,7 +204,7 @@ def run_update_cycle(mode: str = "paper") -> None:
     execute_signals([], actions, current_prices=current_prices, mode=mode)
 
     # Slack summary
-    today = date.today().strftime("%Y-%m-%d")
+    today = datetime.now(EASTERN).strftime("%Y-%m-%d")
     lines = [f"*Position Update — {today}*"]
     action_map = {a.ticker: a for a in actions}
     for pos in positions:
@@ -258,7 +258,7 @@ def _filter_us_exchange(tickers: list[str]) -> list[str]:
 
 def run_calendar_preview() -> None:
     """7:00 PM ET — post tomorrow's earnings calendar to Slack."""
-    tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(EASTERN) + timedelta(days=1)).strftime("%Y-%m-%d")
     logger.info(f"=== Calendar Preview: {tomorrow} ===")
 
     try:
