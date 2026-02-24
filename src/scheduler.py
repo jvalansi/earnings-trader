@@ -9,9 +9,9 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify
-from data.earnings import get_earnings_calendar, get_earnings_calendar_details, get_earnings_surprise
+from data.earnings import get_earnings_calendar_details, get_earnings_surprise
 from data.prices import get_ohlcv, get_atr, get_ah_move, get_premarket_move, get_prior_runup
-from data.sector import get_sector_move, get_exchange
+from data.sector import get_sector_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
@@ -33,7 +33,9 @@ def run_scan_cycle(mode: str = "paper") -> None:
     logger.info(f"=== Scan Cycle: {today} ===")
 
     try:
-        tickers = get_earnings_calendar(today, timing="all")
+        all_entries = get_earnings_calendar_details(today)
+        all_entries = [e for e in all_entries if e.eps_estimate is not None]
+        tickers = _filter_us_exchange([e.ticker for e in all_entries])
     except Exception as e:
         logger.error(f"Failed to fetch earnings calendar: {e}", exc_info=True)
         return
@@ -49,11 +51,6 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     for ticker in tickers:
         try:
-            exchange = get_exchange(ticker)
-            if exchange not in ALLOWED_EXCHANGES:
-                logger.debug(f"Skipping {ticker}: exchange '{exchange}' not in allowed list")
-                continue
-
             surprise = get_earnings_surprise(ticker, date=today)
             ah_move = get_ah_move(ticker, today)
             prior_runup = get_prior_runup(ticker)
@@ -117,7 +114,9 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
     logger.info(f"=== BMO Scan Cycle: {today} ===")
 
     try:
-        tickers = get_earnings_calendar(today, timing="all")
+        all_entries = get_earnings_calendar_details(today)
+        all_entries = [e for e in all_entries if e.eps_estimate is not None]
+        tickers = _filter_us_exchange([e.ticker for e in all_entries])
     except Exception as e:
         logger.error(f"Failed to fetch BMO earnings calendar: {e}", exc_info=True)
         return
@@ -133,11 +132,6 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
 
     for ticker in tickers:
         try:
-            exchange = get_exchange(ticker)
-            if exchange not in ALLOWED_EXCHANGES:
-                logger.debug(f"Skipping {ticker}: exchange '{exchange}' not in allowed list")
-                continue
-
             surprise = get_earnings_surprise(ticker, date=today)
             pm_move = get_premarket_move(ticker, today)
             prior_runup = get_prior_runup(ticker)
