@@ -35,3 +35,11 @@ Run this before any `git push` if the remote is not already authenticated.
 ## Workflow
 
 Always commit **and push** after making changes. Never leave commits unpushed.
+
+**After any code change, restart the service** so the running process picks up the new code:
+
+```bash
+sudo systemctl restart earnings-trader
+```
+
+The service runs continuously — without a restart, the old code stays in memory and changes have no effect. This is especially critical for scheduler logic, Notion integration, and any module loaded at startup.
