@@ -7,10 +7,9 @@ Usage:
 The page ID is the last part of the Notion page URL:
     https://www.notion.so/My-Page-<page-id>
 
-Creates three databases inside that page:
-    - Earnings Scans   (BMO + AMC scan results)
-    - Open Positions   (current open positions, kept in sync)
-    - Earnings Calendar (upcoming earnings)
+Creates two databases inside that page:
+    - Earnings Calendar (upcoming earnings pre-populated with estimates; updated at scan time with actuals and filter results)
+    - Open Positions    (current open positions, kept in sync)
 
 Saves database IDs to data/notion_config.json.
 Running this script again is safe — it will create duplicate databases,
@@ -59,14 +58,18 @@ def main() -> None:
 
     print("Creating Notion databases...")
 
-    # ── Earnings Scans ────────────────────────────────────────────────────────
-    scans_id = create_db("Earnings Scans", {
+    # ── Earnings Calendar ─────────────────────────────────────────────────────
+    # Populated at 7 PM with estimates; updated at scan time with actuals + filter results.
+    calendar_id = create_db("Earnings Calendar", {
         "Ticker":       {"title": {}},
         "Date":         {"date": {}},
-        "Type":         {"select": {"options": [
-                            {"name": "BMO", "color": "blue"},
-                            {"name": "AMC", "color": "orange"},
+        "Timing":       {"select": {"options": [
+                            {"name": "bmo",     "color": "blue"},
+                            {"name": "amc",     "color": "orange"},
+                            {"name": "unknown", "color": "gray"},
                         ]}},
+        "EPS Estimate": {"number": {"format": "number"}},
+        "Rev Estimate": {"number": {"format": "number"}},
         "Signal":       {"select": {"options": [
                             {"name": "BUY",  "color": "green"},
                             {"name": "skip", "color": "gray"},
@@ -83,7 +86,7 @@ def main() -> None:
         "guidance":     {"checkbox": {}},
         "capacity":     {"checkbox": {}},
     })
-    print(f"  Earnings Scans:    {scans_id}")
+    print(f"  Earnings Calendar: {calendar_id}")
 
     # ── Open Positions ────────────────────────────────────────────────────────
     positions_id = create_db("Open Positions", {
@@ -96,18 +99,10 @@ def main() -> None:
     })
     print(f"  Open Positions:    {positions_id}")
 
-    # ── Earnings Calendar ─────────────────────────────────────────────────────
-    calendar_id = create_db("Earnings Calendar", {
-        "Ticker": {"title": {}},
-        "Date":   {"date": {}},
-    })
-    print(f"  Earnings Calendar: {calendar_id}")
-
     # ── Save config ───────────────────────────────────────────────────────────
     config = {
-        "scans_db_id":     scans_id,
-        "positions_db_id": positions_id,
         "calendar_db_id":  calendar_id,
+        "positions_db_id": positions_id,
     }
 
     Path("data").mkdir(exist_ok=True)

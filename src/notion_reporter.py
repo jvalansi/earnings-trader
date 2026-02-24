@@ -1,40 +1,44 @@
 """
-notion_reporter.py — writes scan results, positions, and calendar to Notion databases.
+notion_reporter.py — writes earnings calendar, scan results, and positions to Notion.
 
-Required env vars:
-    NOTION_TOKEN            — integration secret (secret_xxx)
+All data flows into two databases:
+  - Earnings Calendar: rows created at 7 PM with estimates; updated at scan time with
+                       actuals (EPS Beat %, Move %) and filter pass/fail results
+  - Open Positions:    upserted at 4:30 PM each day
+
+Required env var:
+    NOTION_TOKEN  — integration secret (secret_xxx)
 
 Database IDs are stored in data/notion_config.json after running setup_notion.py.
 
 Public API:
+    write_calendar(date, entries)                                    -> None
     write_scan(scan_type, date, signals, move_pcts, eps_beat_pcts)  -> None
     sync_positions(positions)                                        -> None
-    write_calendar(date, tickers)                                    -> None
 """
 import json
 import logging
 import os
 from pathlib import Path
 
+import requests
+
 logger = logging.getLogger(__name__)
 
+NOTION_VERSION = "2022-06-28"
 _CONFIG_FILE = Path("data/notion_config.json")
 _token = os.getenv("NOTION_TOKEN")
-
-# Lazily import notion_client so the rest of the bot works even if it's not installed
-try:
-    from notion_client import Client as _NotionClient
-    _client = _NotionClient(auth=_token) if _token else None
-except ImportError:
-    _NotionClient = None
-    _client = None
-    logger.warning("notion-client not installed — Notion reporting disabled")
+_headers = {
+    "Authorization": f"Bearer {_token}",
+    "Notion-Version": NOTION_VERSION,
+    "Content-Type": "application/json",
+} if _token else None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _load_config() -> dict | None:
-    if not _client:
+    if not _token:
         return None
     if not _CONFIG_FILE.exists():
         logger.warning("data/notion_config.json not found — run setup_notion.py first")
@@ -44,6 +48,41 @@ def _load_config() -> dict | None:
             return json.load(f)
     except Exception as e:
         logger.error(f"Failed to read notion_config.json: {e}")
+        return None
+
+
+def _create_page(db_id: str, props: dict) -> None:
+    r = requests.post(
+        "https://api.notion.com/v1/pages",
+        headers=_headers,
+        json={"parent": {"database_id": db_id}, "properties": props},
+    )
+    r.raise_for_status()
+
+
+def _update_page(page_id: str, props: dict) -> None:
+    r = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=_headers,
+        json={"properties": props},
+    )
+    r.raise_for_status()
+
+
+def _query_db(db_id: str, filter_body: dict) -> list[dict]:
+    r = requests.post(
+        f"https://api.notion.com/v1/databases/{db_id}/query",
+        headers=_headers,
+        json={"filter": filter_body},
+    )
+    r.raise_for_status()
+    return r.json().get("results", [])
+
+
+def _get_title(page: dict, prop: str) -> str | None:
+    try:
+        return page["properties"][prop]["title"][0]["text"]["content"]
+    except (KeyError, IndexError):
         return None
 
 
@@ -63,12 +102,46 @@ def _checkbox(value: bool) -> dict:
     return {"checkbox": bool(value)}
 
 
+def _num(value: float | None) -> dict:
+    return {"number": value}
+
+
 def _pct(value: float | None) -> dict:
-    """Store percentage as a plain number (0.08 -> 8.0) for readability in Notion."""
+    """Convert decimal fraction to display percentage (0.08 -> 8.0)."""
     return {"number": round(value * 100, 2) if value is not None else None}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def write_calendar(date: str, entries: list) -> None:
+    """Create one row per ticker in the Earnings Calendar database.
+
+    entries: list[EarningsCalendarEntry]
+    Populates: Ticker, Date, Timing, EPS Estimate, Rev Estimate.
+    Scan columns are left blank and filled in later by write_scan().
+    """
+    config = _load_config()
+    if not config:
+        return
+    db_id = config.get("calendar_db_id")
+    if not db_id:
+        logger.warning("calendar_db_id missing from notion_config.json")
+        return
+
+    for entry in entries:
+        try:
+            props = {
+                "Ticker":       _title(entry.ticker),
+                "Date":         _date(entry.date),
+                "Timing":       _select(entry.timing),
+                "EPS Estimate": _num(entry.eps_estimate),
+                "Rev Estimate": _num(entry.rev_estimate),
+            }
+            _create_page(db_id, props)
+            logger.debug(f"Notion: created calendar row for {entry.ticker} on {date}")
+        except Exception as e:
+            logger.error(f"Notion: failed to create calendar row for {entry.ticker}: {e}")
+
 
 def write_scan(
     scan_type: str,
@@ -77,25 +150,36 @@ def write_scan(
     move_pcts: dict,
     eps_beat_pcts: dict,
 ) -> None:
-    """Append one row per ticker to the Earnings Scans database.
+    """Update existing calendar rows with scan results (actuals, filters, signal).
 
+    Looks up each ticker's row by date, then patches it.
+    If no row exists (e.g. calendar wasn't run), creates a new one.
     scan_type: "BMO" or "AMC"
     """
     config = _load_config()
     if not config:
         return
-    db_id = config.get("scans_db_id")
+    db_id = config.get("calendar_db_id")
     if not db_id:
-        logger.warning("scans_db_id missing from notion_config.json")
+        logger.warning("calendar_db_id missing from notion_config.json")
+        return
+
+    # Fetch all rows for this date once, build a ticker -> page_id map
+    existing: dict[str, str] = {}
+    try:
+        pages = _query_db(db_id, {"property": "Date", "date": {"equals": date}})
+        for page in pages:
+            ticker = _get_title(page, "Ticker")
+            if ticker:
+                existing[ticker] = page["id"]
+    except Exception as e:
+        logger.error(f"Notion: failed to query calendar for {date}: {e}")
         return
 
     for sig in signals:
         try:
             f = sig.filters_passed or {}
             props = {
-                "Ticker":       _title(sig.ticker),
-                "Date":         _date(date),
-                "Type":         _select(scan_type),
                 "Signal":       _select("BUY" if sig.should_enter else "skip"),
                 "EPS Beat %":   _pct(eps_beat_pcts.get(sig.ticker)),
                 "Move %":       _pct(move_pcts.get(sig.ticker)),
@@ -108,12 +192,20 @@ def write_scan(
                 "capacity":     _checkbox(f.get("capacity", False)),
             }
             if sig.entry_price is not None:
-                props["Entry Price"] = {"number": sig.entry_price}
+                props["Entry Price"] = _num(sig.entry_price)
             if sig.initial_stop is not None:
-                props["Stop Price"] = {"number": sig.initial_stop}
+                props["Stop Price"] = _num(sig.initial_stop)
 
-            _client.pages.create(parent={"database_id": db_id}, properties=props)
-            logger.debug(f"Notion: wrote {scan_type} scan row for {sig.ticker}")
+            if sig.ticker in existing:
+                _update_page(existing[sig.ticker], props)
+                logger.debug(f"Notion: updated {scan_type} scan row for {sig.ticker}")
+            else:
+                # Calendar wasn't pre-populated — create a full row
+                props["Ticker"] = _title(sig.ticker)
+                props["Date"] = _date(date)
+                props["Timing"] = _select(scan_type.lower())
+                _create_page(db_id, props)
+                logger.debug(f"Notion: created {scan_type} scan row for {sig.ticker}")
         except Exception as e:
             logger.error(f"Notion: failed to write {scan_type} row for {sig.ticker}: {e}")
 
@@ -132,17 +224,18 @@ def sync_positions(positions: list) -> None:
         return
 
     # Fetch existing pages keyed by ticker
-    existing: dict[str, str] = {}  # ticker -> page_id
+    existing: dict[str, str] = {}
     try:
-        resp = _client.databases.query(database_id=db_id)
-        for page in resp.get("results", []):
-            try:
-                title_parts = page["properties"]["Ticker"]["title"]
-                if title_parts:
-                    ticker = title_parts[0]["text"]["content"]
-                    existing[ticker] = page["id"]
-            except (KeyError, IndexError):
-                pass
+        r = requests.post(
+            f"https://api.notion.com/v1/databases/{db_id}/query",
+            headers=_headers,
+            json={},
+        )
+        r.raise_for_status()
+        for page in r.json().get("results", []):
+            ticker = _get_title(page, "Ticker")
+            if ticker:
+                existing[ticker] = page["id"]
     except Exception as e:
         logger.error(f"Notion: failed to query positions database: {e}")
         return
@@ -153,7 +246,11 @@ def sync_positions(positions: list) -> None:
     for ticker, page_id in existing.items():
         if ticker not in active_tickers:
             try:
-                _client.pages.update(page_id=page_id, archived=True)
+                requests.patch(
+                    f"https://api.notion.com/v1/pages/{page_id}",
+                    headers=_headers,
+                    json={"archived": True},
+                ).raise_for_status()
                 logger.debug(f"Notion: archived closed position {ticker}")
             except Exception as e:
                 logger.error(f"Notion: failed to archive position {ticker}: {e}")
@@ -163,41 +260,17 @@ def sync_positions(positions: list) -> None:
         try:
             props = {
                 "Ticker":       _title(pos.ticker),
-                "Entry Price":  {"number": pos.entry_price},
+                "Entry Price":  _num(pos.entry_price),
                 "Entry Date":   _date(pos.entry_date),
-                "Stop":         {"number": pos.current_stop},
-                "Day":          {"number": pos.day_count},
-                "Qty":          {"number": pos.quantity},
+                "Stop":         _num(pos.current_stop),
+                "Day":          _num(pos.day_count),
+                "Qty":          _num(pos.quantity),
             }
             if pos.ticker in existing:
-                _client.pages.update(page_id=existing[pos.ticker], properties=props)
+                _update_page(existing[pos.ticker], props)
                 logger.debug(f"Notion: updated position {pos.ticker}")
             else:
-                _client.pages.create(parent={"database_id": db_id}, properties=props)
+                _create_page(db_id, props)
                 logger.debug(f"Notion: created position row for {pos.ticker}")
         except Exception as e:
             logger.error(f"Notion: failed to upsert position {pos.ticker}: {e}")
-
-
-def write_calendar(date: str, tickers: list) -> None:
-    """Append one row per ticker to the Earnings Calendar database."""
-    config = _load_config()
-    if not config:
-        return
-    db_id = config.get("calendar_db_id")
-    if not db_id:
-        logger.warning("calendar_db_id missing from notion_config.json")
-        return
-
-    for ticker in tickers:
-        try:
-            _client.pages.create(
-                parent={"database_id": db_id},
-                properties={
-                    "Ticker": _title(ticker),
-                    "Date":   _date(date),
-                },
-            )
-            logger.debug(f"Notion: wrote calendar row for {ticker} on {date}")
-        except Exception as e:
-            logger.error(f"Notion: failed to write calendar row for {ticker}: {e}")

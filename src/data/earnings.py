@@ -2,8 +2,10 @@
 Earnings data from the Financial Modeling Prep (FMP) API.
 
     EarningsSurprise                          dataclass with eps/rev beat pcts and guidance flag
+    EarningsCalendarEntry                     dataclass with ticker, date, timing, estimates
     get_earnings_surprise(ticker, date=None)  -> EarningsSurprise
     get_earnings_calendar(date, timing='amc') -> list[str]   timing: 'amc' | 'bmo'
+    get_earnings_calendar_details(date)       -> list[EarningsCalendarEntry]
 
 Requires env var: FMP_API_KEY
 """
@@ -29,6 +31,15 @@ class EarningsSurprise:
     rev_estimate: float
     rev_beat_pct: float         # (actual - estimate) / abs(estimate)
     guidance_weak: bool | None  # None if guidance data unavailable
+
+
+@dataclass
+class EarningsCalendarEntry:
+    ticker: str
+    date: str
+    timing: str             # 'bmo', 'amc', or 'unknown'
+    eps_estimate: float | None
+    rev_estimate: float | None
 
 
 def _beat_pct(actual: float, estimate: float) -> float:
@@ -109,3 +120,37 @@ def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
 
     logger.info(f"Earnings calendar for {date} ({timing}): {len(tickers)} tickers")
     return tickers
+
+
+def get_earnings_calendar_details(date: str) -> list[EarningsCalendarEntry]:
+    """Return earnings calendar entries with estimate data for all tickers on the given date."""
+    url = f"{BASE_STABLE}/earnings-calendar"
+    params = {"from": date, "to": date, "apikey": FMP_API_KEY}
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    records = resp.json()
+
+    entries = []
+    for r in records:
+        symbol = r.get("symbol", "")
+        if not symbol:
+            continue
+        time_val = r.get("time", "").lower()
+        if time_val == "bmo":
+            timing = "bmo"
+        elif time_val in ("amc", ""):
+            timing = "amc"
+        else:
+            timing = "unknown"
+        eps_est = r.get("epsEstimated")
+        rev_est = r.get("revenueEstimated")
+        entries.append(EarningsCalendarEntry(
+            ticker=symbol.upper(),
+            date=date,
+            timing=timing,
+            eps_estimate=float(eps_est) if eps_est is not None else None,
+            rev_estimate=float(rev_est) if rev_est is not None else None,
+        ))
+
+    logger.info(f"Earnings calendar details for {date}: {len(entries)} entries")
+    return entries

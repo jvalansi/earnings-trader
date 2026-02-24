@@ -9,7 +9,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify
-from data.earnings import get_earnings_calendar, get_earnings_surprise
+from data.earnings import get_earnings_calendar, get_earnings_calendar_details, get_earnings_surprise
 from data.prices import get_ohlcv, get_atr, get_ah_move, get_premarket_move, get_prior_runup
 from data.sector import get_sector_move, get_exchange
 from decision import evaluate_entry, evaluate_positions
@@ -281,14 +281,18 @@ def _filter_us_exchange(tickers: list[str]) -> list[str]:
 
 
 def run_calendar_preview() -> None:
-    """7:00 PM ET — post tomorrow's earnings calendar to Slack."""
+    """7:00 PM ET — post tomorrow's earnings calendar to Slack and Notion."""
     tomorrow = (datetime.now(EASTERN) + timedelta(days=1)).strftime("%Y-%m-%d")
     logger.info(f"=== Calendar Preview: {tomorrow} ===")
 
     try:
-        tickers = _filter_us_exchange(get_earnings_calendar(tomorrow, timing="all"))
+        all_entries = get_earnings_calendar_details(tomorrow)
+        valid_tickers = set(_filter_us_exchange([e.ticker for e in all_entries]))
+        entries = [e for e in all_entries if e.ticker in valid_tickers]
+        tickers = sorted(valid_tickers)
     except Exception as e:
         logger.error(f"Failed to fetch calendar for {tomorrow}: {e}", exc_info=True)
+        entries = []
         tickers = []
 
     lines = [f"*Earnings Calendar — {tomorrow}*"]
@@ -299,7 +303,7 @@ def run_calendar_preview() -> None:
     notify("\n".join(lines))
 
     try:
-        notion_reporter.write_calendar(tomorrow, tickers)
+        notion_reporter.write_calendar(tomorrow, entries)
     except Exception as e:
         logger.error(f"Notion: failed to write calendar: {e}", exc_info=True)
 
