@@ -113,11 +113,57 @@ def _pct(value: float | None) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def clear_calendar() -> int:
+    """Archive all rows in the Earnings Calendar database.
+
+    Paginates through the full database and archives every page.
+    Returns the count of archived rows.
+    """
+    config = _load_config()
+    if not config:
+        return 0
+    db_id = config.get("calendar_db_id")
+    if not db_id:
+        logger.warning("calendar_db_id missing from notion_config.json")
+        return 0
+
+    cursor = None
+    archived = 0
+    while True:
+        body: dict = {}
+        if cursor:
+            body["start_cursor"] = cursor
+        r = requests.post(
+            f"https://api.notion.com/v1/databases/{db_id}/query",
+            headers=_headers,
+            json=body,
+        )
+        r.raise_for_status()
+        data = r.json()
+        for page in data.get("results", []):
+            try:
+                requests.patch(
+                    f"https://api.notion.com/v1/pages/{page['id']}",
+                    headers=_headers,
+                    json={"archived": True},
+                ).raise_for_status()
+                archived += 1
+            except Exception as e:
+                logger.error(f"Notion: failed to archive page {page['id']}: {e}")
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+
+    logger.info(f"Notion: archived {archived} calendar rows")
+    return archived
+
+
 def write_calendar(date: str, entries: list) -> None:
-    """Create one row per ticker in the Earnings Calendar database.
+    """Upsert one row per ticker in the Earnings Calendar database.
 
     entries: list[EarningsCalendarEntry]
     Populates: Ticker, Date, Timing, EPS Estimate, Rev Estimate.
+    Skips rows that already exist for this date (deduplication).
     Scan columns are left blank and filled in later by write_scan().
     """
     config = _load_config()
@@ -128,7 +174,21 @@ def write_calendar(date: str, entries: list) -> None:
         logger.warning("calendar_db_id missing from notion_config.json")
         return
 
+    # Query existing rows for this date to avoid duplicates
+    existing_tickers: set[str] = set()
+    try:
+        pages = _query_db(db_id, {"property": "Date", "date": {"equals": date}})
+        for page in pages:
+            ticker = _get_title(page, "Ticker")
+            if ticker:
+                existing_tickers.add(ticker)
+    except Exception as e:
+        logger.error(f"Notion: failed to query calendar for {date}: {e}")
+
     for entry in entries:
+        if entry.ticker in existing_tickers:
+            logger.debug(f"Notion: skipping duplicate calendar row for {entry.ticker} on {date}")
+            continue
         try:
             props = {
                 "Ticker":       _title(entry.ticker),
