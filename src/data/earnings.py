@@ -110,7 +110,7 @@ def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
         if timing == "all":
             match = True
         elif timing == "amc":
-            match = time_val in ("amc", "")
+            match = time_val == "amc"
         else:
             match = time_val == timing
         if match:
@@ -138,7 +138,7 @@ def get_earnings_calendar_details(date: str) -> list[EarningsCalendarEntry]:
         time_val = r.get("time", "").lower()
         if time_val == "bmo":
             timing = "bmo"
-        elif time_val in ("amc", ""):
+        elif time_val == "amc":
             timing = "amc"
         else:
             timing = "unknown"
