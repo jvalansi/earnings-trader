@@ -11,7 +11,7 @@ from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify
 from data.earnings import get_earnings_calendar_details, get_earnings_surprise
 from data.prices import get_ohlcv, get_atr, get_ah_move, get_premarket_move, get_prior_runup
-from data.sector import get_sector_move
+from data.sector import get_sector_move, get_sector_intraday_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
@@ -102,7 +102,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
 
 def run_bmo_scan_cycle(mode: str = "paper") -> None:
-    """9:00 AM ET — scan today's earnings for entry signals using pre-market move.
+    """10:00 AM ET — scan today's earnings for entry signals using pre-market move.
 
     Mirrors run_scan_cycle but uses pre-market move instead of AH move.
     1. Fetch today's full earnings calendar
@@ -135,7 +135,7 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
             surprise = get_earnings_surprise(ticker, date=today)
             pm_move = get_premarket_move(ticker, today)
             prior_runup = get_prior_runup(ticker)
-            sector_move = get_sector_move(ticker, today)
+            sector_move = get_sector_intraday_move(ticker, today)
             atr = get_atr(ticker)
             df = get_ohlcv(ticker, days=1)
             current_price = float(df["Close"].iloc[-1])
@@ -324,11 +324,12 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     scheduler.add_job(
         run_bmo_scan_cycle,
         trigger="cron",
-        hour=9,
+        hour=10,
         minute=0,
         kwargs={"mode": mode},
         id="bmo_scan_cycle",
-        name="BMO Earnings Scan @ 9:00 AM ET",
+        name="BMO Earnings Scan @ 10:00 AM ET",
+        misfire_grace_time=1,
     )
     scheduler.add_job(
         run_scan_cycle,
@@ -338,6 +339,7 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         kwargs={"mode": mode},
         id="scan_cycle",
         name="Earnings Scan @ 4:15 PM ET",
+        misfire_grace_time=1,
     )
     scheduler.add_job(
         run_update_cycle,
@@ -347,6 +349,7 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         kwargs={"mode": mode},
         id="update_cycle",
         name="Position Update @ 4:30 PM ET",
+        misfire_grace_time=1,
     )
     scheduler.add_job(
         run_calendar_preview,
@@ -355,10 +358,11 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         minute=0,
         id="calendar_preview",
         name="Calendar Preview @ 7:00 PM ET",
+        misfire_grace_time=1,
     )
 
     logger.info(f"Scheduler starting in {mode!r} mode.")
-    logger.info("  BMO scan:         9:00 AM ET (pre-market move + evaluate entries)")
+    logger.info("  BMO scan:        10:00 AM ET (pre-market move + evaluate entries)")
     logger.info("  Scan cycle:       4:15 PM ET (fetch earnings + evaluate entries)")
     logger.info("  Update cycle:     4:30 PM ET (manage open positions)")
     logger.info("  Calendar preview: 7:00 PM ET (tomorrow's earnings calendar)")

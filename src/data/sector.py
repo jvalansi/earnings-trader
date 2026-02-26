@@ -58,6 +58,47 @@ def get_sector_etf(ticker: str) -> str:
         return FALLBACK_ETF
 
 
+def get_sector_intraday_move(ticker: str, date: str) -> float:
+    """Return the sector ETF's % move on the given date using intraday data.
+
+    Uses 1-minute prepost data so it works during pre-market and early session
+    (before the daily bar is available). Compares the latest available price
+    for `date` against the prior regular-session close.
+
+    date format: 'YYYY-MM-DD'
+    Returns fractional change, e.g. -0.01 = -1%.
+    """
+    etf = get_sector_etf(ticker)
+    date_dt = datetime.strptime(date, "%Y-%m-%d")
+    start = (date_dt - timedelta(days=5)).strftime("%Y-%m-%d")
+    end = (date_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    import pytz
+    eastern = pytz.timezone("US/Eastern")
+
+    df = yf.Ticker(etf).history(start=start, end=end, interval="1m", prepost=True)
+    if df.empty:
+        raise ValueError(f"No intraday ETF data for {etf} on {date}")
+
+    if df.index.tzinfo is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(eastern)
+    else:
+        df.index = df.index.tz_convert(eastern)
+
+    date_naive = date_dt.date()
+    prior_regular = df[df.index.date < date_naive].between_time("09:30", "15:59")
+    if prior_regular.empty:
+        raise ValueError(f"No prior regular session data for {etf}")
+    prior_close = float(prior_regular["Close"].iloc[-1])
+
+    today_data = df[df.index.date == date_naive]
+    if today_data.empty:
+        raise ValueError(f"No intraday ETF data for {etf} on {date}")
+    latest_price = float(today_data["Close"].iloc[-1])
+
+    return (latest_price / prior_close) - 1.0
+
+
 def get_sector_move(ticker: str, date: str) -> float:
     """Return the sector ETF's daily % change on the given date.
 
