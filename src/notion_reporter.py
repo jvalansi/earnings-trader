@@ -158,35 +158,55 @@ def clear_calendar() -> int:
     return archived
 
 
-def write_calendar(date: str, entries: list) -> None:
+def write_calendar(date: str, entries: list) -> tuple[int, int]:
     """Upsert one row per ticker in the Earnings Calendar database.
 
     entries: list[EarningsCalendarEntry]
     Populates: Ticker, Date, Timing, EPS Estimate, Rev Estimate.
-    Skips rows that already exist for this date (deduplication).
+    Archives stale rows (date matches but ticker no longer in filtered list).
     Scan columns are left blank and filled in later by write_scan().
+    Returns (created, archived) counts.
     """
     config = _load_config()
     if not config:
-        return
+        return 0, 0
     db_id = config.get("calendar_db_id")
     if not db_id:
         logger.warning("calendar_db_id missing from notion_config.json")
-        return
+        return 0, 0
 
-    # Query existing rows for this date to avoid duplicates
-    existing_tickers: set[str] = set()
+    expected_tickers = {e.ticker for e in entries}
+
+    # Query existing rows for this date
+    existing: dict[str, str] = {}  # ticker -> page_id
     try:
         pages = _query_db(db_id, {"property": "Date", "date": {"equals": date}})
         for page in pages:
             ticker = _get_title(page, "Ticker")
             if ticker:
-                existing_tickers.add(ticker)
+                existing[ticker] = page["id"]
     except Exception as e:
         logger.error(f"Notion: failed to query calendar for {date}: {e}")
 
+    # Archive stale rows (in Notion but no longer in the filtered list)
+    archived = 0
+    for ticker, page_id in existing.items():
+        if ticker not in expected_tickers:
+            try:
+                requests.patch(
+                    f"https://api.notion.com/v1/pages/{page_id}",
+                    headers=_headers,
+                    json={"archived": True},
+                ).raise_for_status()
+                archived += 1
+                logger.debug(f"Notion: archived stale calendar row for {ticker} on {date}")
+            except Exception as e:
+                logger.error(f"Notion: failed to archive stale row for {ticker} on {date}: {e}")
+
+    # Create rows for tickers not yet in Notion
+    created = 0
     for entry in entries:
-        if entry.ticker in existing_tickers:
+        if entry.ticker in existing:
             logger.debug(f"Notion: skipping duplicate calendar row for {entry.ticker} on {date}")
             continue
         try:
@@ -198,9 +218,12 @@ def write_calendar(date: str, entries: list) -> None:
                 "Rev Estimate": _num(entry.rev_estimate),
             }
             _create_page(db_id, props)
+            created += 1
             logger.debug(f"Notion: created calendar row for {entry.ticker} on {date}")
         except Exception as e:
             logger.error(f"Notion: failed to create calendar row for {entry.ticker}: {e}")
+
+    return created, archived
 
 
 def write_scan(

@@ -299,7 +299,16 @@ def run_calendar_preview() -> None:
     notify("\n".join(lines))
 
     try:
-        notion_reporter.write_calendar(tomorrow, entries)
+        created, archived = notion_reporter.write_calendar(tomorrow, entries)
+        logger.info(
+            f"Notion calendar for {tomorrow}: {len(entries)} expected, "
+            f"{created} created, {archived} stale archived"
+        )
+        if archived:
+            logger.warning(
+                f"Notion: archived {archived} stale rows for {tomorrow} — "
+                "these were in Notion but not in the filtered ticker list"
+            )
     except Exception as e:
         logger.error(f"Notion: failed to write calendar: {e}", exc_info=True)
 
