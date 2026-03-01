@@ -88,7 +88,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
                 ("✅" if v else "❌") + f" {k}" for k, v in sig.filters_passed.items()
             )
             if sig.should_enter:
-                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}\n    {checks}")
+                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop loss ${sig.initial_stop:.2f}\n    {checks}")
             else:
                 lines.append(f"➖ *{sig.ticker}* — no entry\n    {checks}")
         notify("\n".join(lines))
@@ -169,7 +169,7 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
                 ("✅" if v else "❌") + f" {k}" for k, v in sig.filters_passed.items()
             )
             if sig.should_enter:
-                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}\n    {checks}")
+                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop loss ${sig.initial_stop:.2f}\n    {checks}")
             else:
                 lines.append(f"➖ *{sig.ticker}* — no entry\n    {checks}")
         notify("\n".join(lines))
@@ -229,12 +229,19 @@ def run_update_cycle(mode: str = "paper") -> None:
         price = current_prices.get(pos.ticker)
         act = action_map.get(pos.ticker)
         price_str = f"${price:.2f}" if price is not None else "n/a"
-        if act and act.action == "sell":
-            lines.append(f"📉 *{pos.ticker}* — SOLD @ {price_str} | {act.reason} (day {pos.day_count}/{10})")
-        elif act and act.action == "update_stop":
-            lines.append(f"🔄 *{pos.ticker}* — holding @ {price_str} | stop → ${act.new_stop:.2f} (day {pos.day_count}/10)")
+        entry_str = f"${pos.entry_price:.2f}"
+        if price is not None:
+            pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+            pnl_sign = "+" if pnl_pct >= 0 else ""
+            price_detail = f"entry {entry_str} → now {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
         else:
-            lines.append(f"⏸ *{pos.ticker}* — holding @ {price_str} | stop ${pos.current_stop:.2f} (day {pos.day_count}/10)")
+            price_detail = f"entry {entry_str} → now n/a"
+        if act and act.action == "sell":
+            lines.append(f"📉 *{pos.ticker}* — SOLD @ {price_str} | {price_detail} | {act.reason} (day {pos.day_count}/{10})")
+        elif act and act.action == "update_stop":
+            lines.append(f"🔄 *{pos.ticker}* — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
+        else:
+            lines.append(f"⏸ *{pos.ticker}* — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
     notify("\n".join(lines))
 
 
