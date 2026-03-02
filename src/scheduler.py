@@ -303,6 +303,29 @@ def run_calendar_preview() -> None:
         lines.append(f"{len(tickers)} reporting: {', '.join(tickers)}")
     else:
         lines.append("No earnings reporting.")
+
+    # Current holdings with buy price and ROI
+    positions = load_positions()
+    if positions:
+        lines.append("\n*Current Holdings*")
+        for pos in positions:
+            try:
+                df = get_ohlcv(pos.ticker, days=1)
+                current_price = float(df["Close"].iloc[-1])
+                roi_pct = (current_price - pos.entry_price) / pos.entry_price * 100
+                roi_sign = "+" if roi_pct >= 0 else ""
+                lines.append(
+                    f"  • *{pos.ticker}* — {pos.quantity} shares | "
+                    f"buy ${pos.entry_price:.2f} → ${current_price:.2f} "
+                    f"({roi_sign}{roi_pct:.1f}%) | day {pos.day_count}/10"
+                )
+            except Exception as e:
+                logger.warning(f"Could not fetch price for {pos.ticker}: {e}")
+                lines.append(
+                    f"  • *{pos.ticker}* — {pos.quantity} shares | "
+                    f"buy ${pos.entry_price:.2f} | price unavailable | day {pos.day_count}/10"
+                )
+
     notify("\n".join(lines))
 
     try:
