@@ -90,7 +90,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
             if sig.should_enter:
                 lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{sig.ticker}* — no entry  {checks}")
+                lines.append(f"➖ *{sig.ticker}*  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
@@ -171,7 +171,7 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
             if sig.should_enter:
                 lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{sig.ticker}* — no entry  {checks}")
+                lines.append(f"➖ *{sig.ticker}*  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
