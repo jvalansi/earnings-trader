@@ -83,14 +83,14 @@ def run_scan_cycle(mode: str = "paper") -> None:
     # Slack summary
     if signals:
         lines = [f"*Earnings Scan — {today}* ({len(tickers)} tickers)"]
+        keys = list(signals[0].filters_passed.keys())
+        lines.append("  " + " | ".join(keys))
         for sig in signals:
-            checks = " ".join(
-                ("✅" if v else "❌") + f" {k}" for k, v in sig.filters_passed.items()
-            )
+            checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
             if sig.should_enter:
-                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop loss ${sig.initial_stop:.2f}\n    {checks}")
+                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{sig.ticker}* — no entry\n    {checks}")
+                lines.append(f"➖ *{sig.ticker}* — no entry  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
@@ -164,14 +164,14 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
     # Slack summary
     if signals:
         lines = [f"*BMO Earnings Scan — {today}* ({len(tickers)} tickers)"]
+        keys = list(signals[0].filters_passed.keys())
+        lines.append("  " + " | ".join(keys))
         for sig in signals:
-            checks = " ".join(
-                ("✅" if v else "❌") + f" {k}" for k, v in sig.filters_passed.items()
-            )
+            checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
             if sig.should_enter:
-                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop loss ${sig.initial_stop:.2f}\n    {checks}")
+                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{sig.ticker}* — no entry\n    {checks}")
+                lines.append(f"➖ *{sig.ticker}* — no entry  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
