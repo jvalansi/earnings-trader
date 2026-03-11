@@ -1,7 +1,10 @@
+import json
 import logging
 import re
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Literal
 
 import pytz
@@ -245,6 +248,104 @@ def run_update_cycle(mode: str = "paper") -> None:
     notify("\n".join(lines))
 
 
+def run_weekly_pnl_summary() -> None:
+    """Monday 9:00 AM ET — post last week's realized PnL summary to Slack."""
+    now = datetime.now(EASTERN)
+    week_end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = week_end - timedelta(days=7)
+    logger.info(f"=== Weekly PnL Summary: {week_start.date()} to {week_end.date()} ===")
+
+    trades_path = Path(__file__).parent.parent / "data" / "trades_log.jsonl"
+    if not trades_path.exists():
+        notify("*Weekly PnL Summary*: no trades log found.")
+        return
+
+    # Load all successful trades in the past week
+    buys: dict[str, list[dict]] = defaultdict(list)   # ticker → stack of buy entries
+    closed_trades: list[dict] = []
+
+    with trades_path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not t.get("success"):
+                continue
+            ts = datetime.fromisoformat(t["timestamp"]).astimezone(EASTERN)
+            if t["action"] == "buy":
+                buys[t["ticker"]].append({"price": t["fill_price"], "qty": t["quantity"], "ts": ts})
+            elif t["action"] == "sell" and week_start <= ts < week_end:
+                # Match against earliest unmatched buy for this ticker
+                ticker = t["ticker"]
+                buy = buys[ticker].pop(0) if buys[ticker] else None
+                closed_trades.append({
+                    "ticker": ticker,
+                    "buy_price": buy["price"] if buy else None,
+                    "sell_price": t["fill_price"],
+                    "qty": t["quantity"],
+                    "sell_ts": ts,
+                })
+
+    lines = [f"*Weekly PnL Summary — {week_start.strftime('%b %d')} to {week_end.strftime('%b %d, %Y')}*"]
+
+    if closed_trades:
+        total_pnl = 0.0
+        wins, losses = 0, 0
+        for ct in closed_trades:
+            if ct["buy_price"] is not None:
+                pnl = (ct["sell_price"] - ct["buy_price"]) * ct["qty"]
+                pnl_pct = (ct["sell_price"] - ct["buy_price"]) / ct["buy_price"] * 100
+                total_pnl += pnl
+                sign = "+" if pnl >= 0 else ""
+                icon = "✅" if pnl >= 0 else "❌"
+                if pnl >= 0:
+                    wins += 1
+                else:
+                    losses += 1
+                lines.append(
+                    f"{icon} *{ct['ticker']}* — {ct['qty']} shares | "
+                    f"${ct['buy_price']:.2f} → ${ct['sell_price']:.2f} "
+                    f"({sign}{pnl_pct:.1f}%) | {sign}${pnl:.2f}"
+                )
+            else:
+                lines.append(f"❓ *{ct['ticker']}* — sold @ ${ct['sell_price']:.2f} (no matching buy)")
+
+        total_sign = "+" if total_pnl >= 0 else ""
+        win_rate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
+        lines.append(
+            f"\n*Total: {total_sign}${total_pnl:.2f}* | "
+            f"{wins}W / {losses}L ({win_rate:.0f}% win rate)"
+        )
+    else:
+        lines.append("No closed trades this week.")
+
+    # Open positions (unrealized)
+    positions = load_positions()
+    if positions:
+        lines.append("\n*Open Positions (unrealized)*")
+        for pos in positions:
+            try:
+                df = get_ohlcv(pos.ticker, days=1)
+                price = float(df["Close"].iloc[-1])
+                pnl = (price - pos.entry_price) * pos.quantity
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                sign = "+" if pnl >= 0 else ""
+                lines.append(
+                    f"  • *{pos.ticker}* — {pos.quantity} sh | "
+                    f"${pos.entry_price:.2f} → ${price:.2f} "
+                    f"({sign}{pnl_pct:.1f}%) | {sign}${pnl:.2f} | day {pos.day_count}/10"
+                )
+            except Exception as e:
+                logger.warning(f"Could not fetch price for {pos.ticker}: {e}")
+                lines.append(f"  • *{pos.ticker}* — price unavailable | day {pos.day_count}/10")
+
+    notify("\n".join(lines))
+
+
 _US_TICKER_RE = re.compile(r"^[A-Z]{1,5}$")
 
 
@@ -390,10 +491,21 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         name="Calendar Preview @ 7:00 PM ET",
         misfire_grace_time=1,
     )
+    scheduler.add_job(
+        run_weekly_pnl_summary,
+        trigger="cron",
+        day_of_week="mon",
+        hour=9,
+        minute=0,
+        id="weekly_pnl_summary",
+        name="Weekly PnL Summary @ 9:00 AM ET Monday",
+        misfire_grace_time=300,
+    )
 
     logger.info(f"Scheduler starting in {mode!r} mode.")
-    logger.info("  BMO scan:        10:00 AM ET (pre-market move + evaluate entries)")
-    logger.info("  Scan cycle:       4:15 PM ET (fetch earnings + evaluate entries)")
-    logger.info("  Update cycle:     4:30 PM ET (manage open positions)")
-    logger.info("  Calendar preview: 7:00 PM ET (tomorrow's earnings calendar)")
+    logger.info("  BMO scan:          10:00 AM ET (pre-market move + evaluate entries)")
+    logger.info("  Scan cycle:         4:15 PM ET (fetch earnings + evaluate entries)")
+    logger.info("  Update cycle:       4:30 PM ET (manage open positions)")
+    logger.info("  Calendar preview:   7:00 PM ET (tomorrow's earnings calendar)")
+    logger.info("  Weekly PnL summary: 9:00 AM ET Monday (last week's realized PnL)")
     scheduler.start()
