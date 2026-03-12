@@ -4,6 +4,16 @@ A systematic trading system that exploits **Post-Earnings Announcement Drift (PE
 
 ---
 
+## Docs
+
+| Document | Description |
+|---|---|
+| [ROADMAP.md](ROADMAP.md) | Phased development plan, strategy investigation, open questions |
+| [PLAN.md](PLAN.md) | Notion integration setup guide |
+| [CLAUDE.md](CLAUDE.md) | Dev workflow notes (running, pushing, restarting) |
+
+---
+
 ## Core Thesis
 
 Markets systematically underreact to earnings surprises. A stock that beats on EPS *and* revenue, confirmed by a positive after-hours price move, tends to continue drifting upward over the following 10 trading days.
@@ -37,22 +47,20 @@ state.py ───┘                            │
 | `state.py` | Reads/writes open positions (entry price, current stop, day count) |
 | `decision.py` | Applies entry and position management logic |
 | `execution.py` | Places orders (paper log or live broker) and writes back state |
-| `scheduler.py` | Runs the two daily cycles at the right times |
+| `scheduler.py` | Runs daily cycles at the right times |
 | `config.py` | All tunable parameters in one place |
 
 ---
 
-## Two Daily Cycles
+## Daily Schedule
 
-### Scan Cycle — 4:15 PM ET (after AH data available)
-```
-prices + earnings + sector + state  →  decision.evaluate_entry()  →  BUY orders
-```
-
-### Update Cycle — 4:30 PM ET
-```
-prices + state  →  decision.evaluate_positions()  →  SELL orders or updated stops
-```
+| Time (ET) | Job | Description |
+|---|---|---|
+| 10:00 AM | BMO Scan | Pre-market move scan for before-market-open reporters |
+| 4:15 PM | AMC Scan | After-hours move scan for after-market-close reporters |
+| 4:30 PM | Position Update | Evaluate open positions, update stops or exit |
+| 7:00 PM | Calendar Preview | Post tomorrow's earnings calendar + current holdings |
+| Mon 9:00 AM | Weekly PnL | Last week's realized PnL summary |
 
 ---
 
@@ -73,7 +81,7 @@ A BUY signal requires **all** of the following:
 
 ## Position Management
 
-- **Stop loss:** Trailing stop set at `entry_price - (1.5 × ATR)`, updated daily
+- **Stop loss:** Trailing stop set at `entry_price - (2.5 × ATR)`, updated daily
 - **Exit:** When price hits stop OR after 10 trading days, whichever comes first
 - **Max positions:** Configurable (default: 5 concurrent)
 
@@ -92,12 +100,16 @@ earnings-trader/
 │   ├── state.py            # JSON-backed position store
 │   ├── decision.py         # evaluate_entry() + evaluate_positions()
 │   ├── execution.py        # place_order() + update_state()
-│   ├── scheduler.py        # APScheduler: scan + update cycles
+│   ├── scheduler.py        # APScheduler: daily cycles
+│   ├── notion_reporter.py  # Notion API integration
+│   ├── setup_notion.py     # one-time Notion database setup
 │   └── main.py             # entry point
 ├── data/                   # runtime data (gitignored)
 │   ├── positions.json
 │   └── trades_log.jsonl
-├── requirements.txt
+├── ROADMAP.md              # phased plan + strategy investigation
+├── PLAN.md                 # Notion integration setup
+├── CLAUDE.md               # dev workflow notes
 └── README.md
 ```
 
@@ -114,7 +126,7 @@ MIN_EPS_BEAT_PCT: float      # minimum EPS beat fraction (e.g. 0.05 = 5%)
 MIN_AH_MOVE_PCT: float       # minimum after-hours % move (e.g. 0.03 = 3%)
 MAX_PRIOR_RUNUP_PCT: float   # max allowed prior 10-day run-up (e.g. 0.10)
 SECTOR_ETF_MIN: float        # minimum sector ETF daily % change (e.g. -0.015)
-ATR_STOP_MULTIPLIER: float   # trailing stop distance in ATR multiples (e.g. 1.5)
+ATR_STOP_MULTIPLIER: float   # trailing stop distance in ATR multiples (e.g. 2.5)
 HOLD_DAYS: int               # maximum holding period in trading days (e.g. 10)
 MAX_POSITIONS: int           # maximum concurrent open positions (e.g. 5)
 LOOKBACK_DAYS: int           # days used for prior run-up calculation (e.g. 10)
@@ -201,20 +213,11 @@ class Position:
     entry_date: str     # 'YYYY-MM-DD'
     day_count: int      # trading days held so far
 
-def load_positions() -> list[Position]:
-    """Load all open positions from the JSON store."""
-
-def save_positions(positions: list[Position]) -> None:
-    """Overwrite the JSON store with the given list of positions."""
-
-def add_position(position: Position) -> None:
-    """Append a new position to the store."""
-
-def remove_position(ticker: str) -> None:
-    """Remove the position for the given ticker from the store."""
-
-def update_stop(ticker: str, new_stop: float) -> None:
-    """Update the trailing stop for an existing position."""
+def load_positions() -> list[Position]: ...
+def save_positions(positions: list[Position]) -> None: ...
+def add_position(position: Position) -> None: ...
+def remove_position(ticker: str) -> None: ...
+def update_stop(ticker: str, new_stop: float) -> None: ...
 ```
 
 ---
@@ -237,27 +240,10 @@ class PositionAction:
     ticker: str
     action: Literal["hold", "sell", "update_stop"]
     new_stop: float | None           # set when action == "update_stop"
-    reason: str                      # e.g. "stop_hit", "max_days_reached", "trailing_stop_updated"
+    reason: str                      # e.g. "stop_hit", "max_days_reached"
 
-def evaluate_entry(
-    ticker: str,
-    surprise: EarningsSurprise,
-    ah_move: float,
-    prior_runup: float,
-    sector_move: float,
-    atr: float,
-    current_price: float,
-    open_positions: list[Position],
-) -> EntrySignal:
-    """Evaluate all six entry filters and return a signal.
-    Returns EntrySignal with should_enter=False if MAX_POSITIONS is already reached."""
-
-def evaluate_positions(
-    positions: list[Position],
-    current_prices: dict[str, float],
-    current_atrs: dict[str, float],
-) -> list[PositionAction]:
-    """Evaluate each open position and return the appropriate action for each."""
+def evaluate_entry(ticker, surprise, ah_move, prior_runup, sector_move, atr, current_price, open_positions) -> EntrySignal: ...
+def evaluate_positions(positions, current_prices, current_atrs) -> list[PositionAction]: ...
 ```
 
 ---
@@ -267,51 +253,12 @@ def evaluate_positions(
 Places orders and updates state. Supports paper and live modes.
 
 ```python
-@dataclass
-class OrderResult:
-    ticker: str
-    action: Literal["buy", "sell"]
-    quantity: int
-    fill_price: float
-    timestamp: str
-    mode: Literal["paper", "live"]
-    success: bool
-    error: str | None
-
-def place_order(
-    ticker: str,
-    action: Literal["buy", "sell"],
-    quantity: int,
-    mode: Literal["paper", "live"] = "paper",
-) -> OrderResult:
-    """Place a buy or sell order. In paper mode, logs to stdout/file and returns a
-    simulated fill. In live mode, submits to the configured broker (Alpaca or IBKR)."""
-
 def execute_signals(
     signals: list[EntrySignal],
     actions: list[PositionAction],
     mode: Literal["paper", "live"] = "paper",
 ) -> None:
-    """Process a batch of entry signals and position actions, placing orders and
-    updating state for each."""
-```
-
----
-
-### `scheduler.py`
-
-Runs the two daily cycles using APScheduler.
-
-```python
-def run_scan_cycle() -> None:
-    """4:15 PM ET — fetch earnings/prices/sector, evaluate entries, place BUY orders."""
-
-def run_update_cycle() -> None:
-    """4:30 PM ET — fetch current prices, evaluate open positions, place SELL orders
-    or update trailing stops."""
-
-def start(mode: Literal["paper", "live"] = "paper") -> None:
-    """Start the APScheduler blocking event loop. Registers both daily cycles."""
+    """Process a batch of entry signals and position actions."""
 ```
 
 ---
@@ -323,7 +270,7 @@ MIN_EPS_BEAT_PCT     = 0.05   # 5% beat required
 MIN_AH_MOVE_PCT      = 0.03   # 3% after-hours confirmation
 MAX_PRIOR_RUNUP_PCT  = 0.10   # 10% max run-up in prior 10 days
 SECTOR_ETF_MIN       = -0.015 # sector must be > -1.5%
-ATR_STOP_MULTIPLIER  = 1.5    # trailing stop = 1.5x ATR
+ATR_STOP_MULTIPLIER  = 2.5    # trailing stop = 2.5x ATR
 HOLD_DAYS            = 10     # max hold period
 MAX_POSITIONS        = 5      # max concurrent positions
 LOOKBACK_DAYS        = 10     # days to check prior run-up
@@ -341,28 +288,6 @@ LOOKBACK_DAYS        = 10     # days to check prior run-up
 
 ---
 
-## Roadmap
-
-### Phase 1 — Backtester
-- [ ] `earnings.py` — pull historical EPS/revenue surprises from FMP
-- [ ] `prices.py` — ATR, AH move, run-up from yfinance
-- [ ] `sector.py` — sector ETF filter
-- [ ] `decision.py` — entry filter logic
-- [ ] Backtest runner — scan historical earnings, simulate entries/exits, report P&L
-
-### Phase 2 — Live Paper Trading
-- [ ] `state.py` — JSON position store
-- [ ] `execution.py` — paper trade logger
-- [ ] `scheduler.py` — two-cycle daily scheduler
-- [ ] End-to-end dry run on next earnings season
-
-### Phase 3 — Live Trading
-- [ ] `execution.py` — broker integration (Alpaca or IBKR)
-- [ ] Position sizing (fixed dollar, Kelly, or vol-adjusted)
-- [ ] Alerting / monitoring
-
----
-
 ## Setup
 
 ```bash
@@ -372,6 +297,8 @@ pip install -r requirements.txt
 cp .env.example .env        # add your FMP_API_KEY
 PYTHONPATH=src python src/main.py
 ```
+
+For Notion integration, see [PLAN.md](PLAN.md).
 
 ---
 
