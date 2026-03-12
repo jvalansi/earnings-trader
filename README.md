@@ -8,7 +8,7 @@ A systematic trading system that exploits **Post-Earnings Announcement Drift (PE
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module interfaces, data flow, project structure |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased plan, strategy investigation, open questions |
-| [docs/CLAUDE.md](docs/CLAUDE.md) | Dev workflow (running, pushing, restarting) |
+| [CLAUDE.md](CLAUDE.md) | Dev workflow (running, pushing, restarting) |
 
 ---
 
