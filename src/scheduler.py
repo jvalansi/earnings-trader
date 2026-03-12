@@ -87,12 +87,14 @@ def run_scan_cycle(mode: str = "paper") -> None:
         lines = [f"*Earnings Scan — {today}* ({len(tickers)} tickers)"]
         keys = list(signals[0].filters_passed.keys())
         lines.append("  " + " | ".join(keys))
+        max_ticker_len = max(len(sig.ticker) for sig in signals)
         for sig in signals:
             checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
+            ticker_col = sig.ticker.ljust(max_ticker_len)
             if sig.should_enter:
-                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
+                lines.append(f"📈 *{ticker_col}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{sig.ticker}*  {checks}")
+                lines.append(f"➖ *{ticker_col}*  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
@@ -164,12 +166,14 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
         lines = [f"*BMO Earnings Scan — {today}* ({len(tickers)} tickers)"]
         keys = list(signals[0].filters_passed.keys())
         lines.append("  " + " | ".join(keys))
+        max_ticker_len = max(len(sig.ticker) for sig in signals)
         for sig in signals:
             checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
+            ticker_col = sig.ticker.ljust(max_ticker_len)
             if sig.should_enter:
-                lines.append(f"📈 *{sig.ticker}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
+                lines.append(f"📈 *{ticker_col}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{sig.ticker}*  {checks}")
+                lines.append(f"➖ *{ticker_col}*  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
@@ -214,6 +218,7 @@ def run_update_cycle(mode: str = "paper") -> None:
     today = datetime.now(EASTERN).strftime("%Y-%m-%d")
     lines = [f"*Position Update — {today}*"]
     action_map = {a.ticker: a for a in actions}
+    max_ticker_len = max(len(pos.ticker) for pos in positions)
     for pos in positions:
         price = current_prices.get(pos.ticker)
         act = action_map.get(pos.ticker)
@@ -225,12 +230,13 @@ def run_update_cycle(mode: str = "paper") -> None:
             price_detail = f"entry {entry_str} → now {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
         else:
             price_detail = f"entry {entry_str} → now n/a"
+        ticker_col = pos.ticker.ljust(max_ticker_len)
         if act and act.action == "sell":
-            lines.append(f"📉 *{pos.ticker}* — SOLD @ {price_str} | {price_detail} | {act.reason} (day {pos.day_count}/{10})")
+            lines.append(f"📉 *{ticker_col}* — SOLD @ {price_str} | {price_detail} | {act.reason} (day {pos.day_count}/{10})")
         elif act and act.action == "update_stop":
-            lines.append(f"🔄 *{pos.ticker}* — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
+            lines.append(f"🔄 *{ticker_col}* — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
         else:
-            lines.append(f"⏸ *{pos.ticker}* — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
+            lines.append(f"⏸ *{ticker_col}* — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
     notify("\n".join(lines))
 
 
