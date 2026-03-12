@@ -41,6 +41,38 @@ The backtester (Phase 1) will be built afterward using the same `data/` modules 
 
 ---
 
+## Strategy Investigation
+
+> Observations from paper trading (Feb–Mar 2026) and open questions to explore.
+
+### Findings so far
+- All 6 losing trades were stopped out before day 10, most within 1–3 days
+- RSKD was stopped out same day as entry — AH move reversed immediately at open
+- 1W / 6L, -$532 total on $1,000/position sizing
+- `ATR_STOP_MULTIPLIER = 1.5` appears too tight for post-earnings volatility; raised to 2.5
+
+### Open questions
+
+**Stop loss calibration**
+- Is 2.5x ATR enough room, or should we go wider (3x)?
+- Should the stop be wider on day 1 (absorb the post-earnings noise) and tighten after day 3?
+
+**Entry timing — skip the AH move signal?**
+- Current: enter after seeing a 3%+ AH move (4:15 PM for AMC, premarket for BMO)
+- Hypothesis: with EPS beat + revenue beat + low prior runup + positive sector ETF, the AH move filter may be redundant and just gives a worse entry price
+- Counter-argument: AH move still provides directional confirmation after guidance is known
+- To investigate: compare win rate of trades that passed all filters vs those that also had AH move
+
+**Minimum price filter**
+- HRTX ($1.20) and RSKD ($4.75) are extremely noisy small-caps
+- Consider adding `MIN_PRICE = 5.0` to avoid sub-$5 stocks
+
+**Position sizing**
+- Fixed $1,000/trade means 833 shares of a $1.20 stock — amplifies noise
+- Consider a minimum price floor or vol-adjusted sizing
+
+---
+
 ## Phase 3 — Live Trading
 
 > Status: **Not started** (after Phase 2 is validated)
