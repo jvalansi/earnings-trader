@@ -92,9 +92,9 @@ def run_scan_cycle(mode: str = "paper") -> None:
             checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
             ticker_col = sig.ticker.ljust(max_ticker_len)
             if sig.should_enter:
-                lines.append(f"📈 *{ticker_col}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
+                lines.append(f"📈 `{ticker_col}` — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{ticker_col}*  {checks}")
+                lines.append(f"➖ `{ticker_col}`  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
@@ -171,9 +171,9 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
             checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
             ticker_col = sig.ticker.ljust(max_ticker_len)
             if sig.should_enter:
-                lines.append(f"📈 *{ticker_col}* — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
+                lines.append(f"📈 `{ticker_col}` — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ *{ticker_col}*  {checks}")
+                lines.append(f"➖ `{ticker_col}`  {checks}")
         notify("\n".join(lines))
     else:
         notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
@@ -232,11 +232,11 @@ def run_update_cycle(mode: str = "paper") -> None:
             price_detail = f"entry {entry_str} → now n/a"
         ticker_col = pos.ticker.ljust(max_ticker_len)
         if act and act.action == "sell":
-            lines.append(f"📉 *{ticker_col}* — SOLD @ {price_str} | {price_detail} | {act.reason} (day {pos.day_count}/{10})")
+            lines.append(f"📉 `{ticker_col}` — SOLD @ {price_str} | {price_detail} | {act.reason} (day {pos.day_count}/{10})")
         elif act and act.action == "update_stop":
-            lines.append(f"🔄 *{ticker_col}* — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
+            lines.append(f"🔄 `{ticker_col}` — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
         else:
-            lines.append(f"⏸ *{ticker_col}* — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
+            lines.append(f"⏸ `{ticker_col}` — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
     notify("\n".join(lines))
 
 
