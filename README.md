@@ -9,7 +9,6 @@ A systematic trading system that exploits **Post-Earnings Announcement Drift (PE
 | Document | Description |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Phased development plan, strategy investigation, open questions |
-| [PLAN.md](PLAN.md) | Notion integration setup guide |
 | [CLAUDE.md](CLAUDE.md) | Dev workflow notes (running, pushing, restarting) |
 
 ---
@@ -101,14 +100,11 @@ earnings-trader/
 │   ├── decision.py         # evaluate_entry() + evaluate_positions()
 │   ├── execution.py        # place_order() + update_state()
 │   ├── scheduler.py        # APScheduler: daily cycles
-│   ├── notion_reporter.py  # Notion API integration
-│   ├── setup_notion.py     # one-time Notion database setup
 │   └── main.py             # entry point
 ├── data/                   # runtime data (gitignored)
 │   ├── positions.json
 │   └── trades_log.jsonl
 ├── ROADMAP.md              # phased plan + strategy investigation
-├── PLAN.md                 # Notion integration setup
 ├── CLAUDE.md               # dev workflow notes
 └── README.md
 ```
@@ -297,8 +293,6 @@ pip install -r requirements.txt
 cp .env.example .env        # add your FMP_API_KEY
 PYTHONPATH=src python src/main.py
 ```
-
-For Notion integration, see [PLAN.md](PLAN.md).
 
 ---
 

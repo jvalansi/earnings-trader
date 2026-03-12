@@ -18,7 +18,6 @@ from data.sector import get_sector_move, get_sector_intraday_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
-import notion_reporter
 
 logger = logging.getLogger(__name__)
 EASTERN = pytz.timezone("US/Eastern")
@@ -98,10 +97,6 @@ def run_scan_cycle(mode: str = "paper") -> None:
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
 
-    try:
-        notion_reporter.write_scan("AMC", today, signals, move_pcts, eps_beat_pcts)
-    except Exception as e:
-        logger.error(f"Notion: failed to write AMC scan: {e}", exc_info=True)
 
 
 def run_bmo_scan_cycle(mode: str = "paper") -> None:
@@ -179,10 +174,6 @@ def run_bmo_scan_cycle(mode: str = "paper") -> None:
     else:
         notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
 
-    try:
-        notion_reporter.write_scan("BMO", today, signals, move_pcts, eps_beat_pcts)
-    except Exception as e:
-        logger.error(f"Notion: failed to write BMO scan: {e}", exc_info=True)
 
 
 def run_update_cycle(mode: str = "paper") -> None:
@@ -218,11 +209,6 @@ def run_update_cycle(mode: str = "paper") -> None:
 
     actions = evaluate_positions(positions, current_prices, current_atrs)
     execute_signals([], actions, current_prices=current_prices, mode=mode)
-
-    try:
-        notion_reporter.sync_positions(load_positions())
-    except Exception as e:
-        logger.error(f"Notion: failed to sync positions: {e}", exc_info=True)
 
     # Slack summary
     today = datetime.now(EASTERN).strftime("%Y-%m-%d")
@@ -429,19 +415,6 @@ def run_calendar_preview() -> None:
 
     notify("\n".join(lines))
 
-    try:
-        created, archived = notion_reporter.write_calendar(tomorrow, entries)
-        logger.info(
-            f"Notion calendar for {tomorrow}: {len(entries)} expected, "
-            f"{created} created, {archived} stale archived"
-        )
-        if archived:
-            logger.warning(
-                f"Notion: archived {archived} stale rows for {tomorrow} — "
-                "these were in Notion but not in the filtered ticker list"
-            )
-    except Exception as e:
-        logger.error(f"Notion: failed to write calendar: {e}", exc_info=True)
 
 
 def start(mode: Literal["paper", "live"] = "paper") -> None:
