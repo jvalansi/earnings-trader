@@ -14,6 +14,8 @@
 
 **Next step (Notion task):** Add P&L performance dashboard + returns tracking — better visibility → better parameter tuning → ~$500/mo improvement in returns.
 
+**Notion project page:** [earnings-trader — Strategy & Profitability](https://www.notion.so/earnings-trader-Strategy-Profitability-32505a1b5e0181e6bc42c00fe95589f1)
+
 ---
 
 ## Why Phase 2 First
