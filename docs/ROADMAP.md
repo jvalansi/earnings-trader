@@ -1,5 +1,21 @@
 # Roadmap
 
+## Roadmap to Profitability
+
+**Current state:** Paper trading — live signals, real data, no capital deployed.
+
+| Milestone | Description | Expected Monthly ROI |
+|---|---|---|
+| **Phase 2 complete** | Paper trading validated, win rate > 50%, positive expectancy | — |
+| **Phase 3: go live** | Deploy $5k capital via Alpaca/IBKR, real P&L | $200–500/mo |
+| **Scale capital** | Raise to $20k+ as strategy proves out | $800–2,000/mo |
+| **Multi-strategy** | Add BMO + sector rotation variants | 2–3× current returns |
+| **Automation** | Zero-touch daily operation, Slack alerts only | — |
+
+**Next step (Notion task):** Add P&L performance dashboard + returns tracking — better visibility → better parameter tuning → ~$500/mo improvement in returns.
+
+---
+
 ## Why Phase 2 First
 
 Rather than building a backtester before seeing any live signals, we're starting with live paper trading so we can:
