@@ -1,5 +1,5 @@
 """
-Order placement and trade logging. Supports paper mode; live mode raises NotImplementedError.
+Order placement and trade logging. Routes to Alpaca paper/live or local simulation.
 
     OrderResult                                                  dataclass: ticker, action, quantity, fill_price, timestamp, mode, success, error
 
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from config import POSITION_SIZE_USD, TRADES_LOG_FILE
+from config import POSITION_SIZE_USD, TRADES_LOG_FILE, ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
 from notifier import notify
 from decision import EntrySignal, PositionAction
 from state import Position, add_position, remove_position, update_stop
@@ -41,6 +41,45 @@ def _append_trade_log(result: OrderResult) -> None:
         f.write(json.dumps(asdict(result)) + "\n")
 
 
+def _place_alpaca_order(
+    ticker: str,
+    action: Literal["buy", "sell"],
+    quantity: int,
+    fill_price: float,
+    mode: Literal["paper", "live"],
+) -> OrderResult:
+    """Submit a market order to Alpaca and wait for fill."""
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import MarketOrderRequest
+    from alpaca.trading.enums import OrderSide, TimeInForce
+
+    paper = (mode == "paper")
+    client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=paper)
+
+    side = OrderSide.BUY if action == "buy" else OrderSide.SELL
+    req = MarketOrderRequest(symbol=ticker, qty=quantity, side=side, time_in_force=TimeInForce.DAY)
+
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        order = client.submit_order(req)
+        # Use submitted fill_price as estimate; Alpaca fills may differ slightly
+        actual_fill = float(order.filled_avg_price) if order.filled_avg_price else fill_price
+        result = OrderResult(
+            ticker=ticker, action=action, quantity=quantity, fill_price=actual_fill,
+            timestamp=ts, mode=mode, success=True, error=None,
+        )
+        logger.info(f"[ALPACA {mode.upper()}] {action.upper()} {quantity} {ticker} @ {actual_fill:.2f} (order_id={order.id})")
+    except Exception as e:
+        result = OrderResult(
+            ticker=ticker, action=action, quantity=quantity, fill_price=fill_price,
+            timestamp=ts, mode=mode, success=False, error=str(e),
+        )
+        logger.error(f"[ALPACA {mode.upper()}] Order failed for {ticker}: {e}")
+
+    _append_trade_log(result)
+    return result
+
+
 def place_order(
     ticker: str,
     action: Literal["buy", "sell"],
@@ -48,26 +87,18 @@ def place_order(
     fill_price: float,
     mode: Literal["paper", "live"] = "paper",
 ) -> OrderResult:
-    """Place a buy or sell order.
+    """Place a buy or sell order via Alpaca (paper or live) if credentials are configured,
+    otherwise fall back to local simulation."""
+    if ALPACA_API_KEY:
+        return _place_alpaca_order(ticker, action, quantity, fill_price, mode)
 
-    In paper mode, logs to trades_log.jsonl and returns a simulated fill.
-    In live mode, raises NotImplementedError (Phase 3).
-    """
-    if mode == "live":
-        raise NotImplementedError("Live broker integration not implemented in Phase 2")
-
+    # Local simulation fallback
     ts = datetime.now(timezone.utc).isoformat()
     result = OrderResult(
-        ticker=ticker,
-        action=action,
-        quantity=quantity,
-        fill_price=fill_price,
-        timestamp=ts,
-        mode="paper",
-        success=True,
-        error=None,
+        ticker=ticker, action=action, quantity=quantity, fill_price=fill_price,
+        timestamp=ts, mode="paper", success=True, error=None,
     )
-    logger.info(f"[PAPER] {action.upper()} {quantity} shares of {ticker} @ {fill_price:.2f}")
+    logger.info(f"[PAPER SIM] {action.upper()} {quantity} shares of {ticker} @ {fill_price:.2f}")
     _append_trade_log(result)
     return result
 
