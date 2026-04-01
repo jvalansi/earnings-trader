@@ -216,9 +216,66 @@ All assume price-bar-driven strategies. This strategy is *earnings-event-driven*
 
 ---
 
-## Success Criteria
+## Evaluation Loop & Exit Strategy
 
-Before using backtest results to tune parameters:
-- Simulated Feb–Mar 2026 trades match paper trades on entry dates (>80% match rate)
-- At least 200 total trades in the backtest window (enough for statistical significance)
-- Backtest completes in under 10 minutes with caching enabled
+### Checkpoints
+
+**Checkpoint 1 — Fidelity validation** *(stop and report)*
+Before running on historical data: show how well the backtester replays Feb–Mar 2026 paper trades.
+- If match rate ≥80% → continue to historical run
+- If match rate <80% → stop; backtester has a bug or data issue; decide whether to debug or fix data before continuing
+
+**Checkpoint 2 — In-sample results (2022–2023)** *(stop and report)*
+Present raw metrics. Three outcomes:
+- **Looks good** → continue to parameter sweep automatically
+- **Looks bad but diagnosable** → present one targeted hypothesis (e.g. "stop too tight") and ask whether to test it
+- **Looks bad and unclear** → stop; present the breakdown; discuss whether the strategy has fundamental problems before continuing
+
+**Checkpoint 3 — Final results** *(stop and report)*
+After out-of-sample (2024) holdout check: sweep results, optimal params vs. current config, and a concrete go/no-go recommendation for Phase 3. Go/no-go decision stays with you.
+
+**Unplanned interruption:** if a hard data blocker is hit mid-build (e.g. FMP doesn't serve historical AH data far enough back), flag it immediately rather than silently working around it.
+
+Implementation details within each phase are handled autonomously — no check-ins for those.
+
+---
+
+### Success Criteria
+
+**Stage 1 — Backtester fidelity** (gate before trusting any results)
+- ≥80% of simulated Feb–Mar 2026 trades match paper trades on entry date
+- No look-ahead bias (only data available by 4:15 PM ET on earnings day used)
+- Full 3-year run completes in <10 min with caching
+
+**Stage 2 — Strategy has edge (2022–2023 in-sample)**
+
+| Metric | Minimum | Good |
+|--------|---------|------|
+| Win rate | >45% | >55% |
+| Expectancy (avg $ per trade) | >$0 | >$50 |
+| Sharpe (annualized) | >0.5 | >1.0 |
+| Max drawdown | <30% | <15% |
+| Trades in window | >150 | >300 |
+
+**Expectancy** is the gate metric — win rate alone is misleading. A 40% win rate with 2:1 win/loss beats a 55% win rate with 0.8:1.
+
+**Stage 3 — Out-of-sample holds (2024 holdout)**
+- Expectancy doesn't degrade >30% vs in-sample
+- Anti-overfitting check: parameters that only work on 2022–2023 will fail here
+
+**Stage 4 — Go/no-go for live capital**
+- All Stage 2 + 3 criteria met
+- Optimal params from sweep differ from current config by no more than one threshold (large changes = overfit signal)
+- Paper trading win rate trending toward backtest expectation
+
+---
+
+### What Failure Tells You
+
+| Outcome | Diagnosis |
+|---------|-----------|
+| Win rate <40%, losses within 1–2 days | Stop too tight — test wider multiplier |
+| Win rate ok, avg win << avg loss | Holding too long into reversals — test shorter `HOLD_DAYS` |
+| Too few trades (<100 in 3 years) | Filters too restrictive — AH move threshold likely culprit |
+| Out-of-sample degrades badly | Overfit — revert to default config, don't tune |
+| Backtest looks great, paper trades don't match | Data issue (AH prices, timing) — fix backtester first |
