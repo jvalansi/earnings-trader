@@ -200,6 +200,22 @@ PYTHONPATH=src python src/backtest/sweep.py --start 2022-01-01 --end 2024-12-31
 
 ---
 
+## Build vs. Reuse
+
+Evaluated: **Backtrader**, **VectorBT**, **Backtesting.py**, **Zipline-Reloaded**.
+
+All assume price-bar-driven strategies. This strategy is *earnings-event-driven* — the trigger is FMP earnings data on specific dates, not price indicators. Wiring that into any framework requires a custom data feed regardless, which costs as much as writing the runner itself.
+
+**Decision: build it.** Reasons:
+- `decision.py` is already pure functions — the runner is just a date loop calling them
+- The data layer (FMP + yfinance fetching + caching) is the same work either way
+- Any library saves the loop but adds 100–200 lines of adapter boilerplate to compensate for non-standard data
+- No library dependency = no version conflicts, easier debugging
+
+**One exception:** once `SimTrade` results exist, **VectorBT** is worth using for the parameter sweep (Step 4). It's fast at scanning large grids and producing ranked output tables — that part of the analysis fits its vectorized model well.
+
+---
+
 ## Success Criteria
 
 Before using backtest results to tune parameters:
