@@ -97,6 +97,31 @@ Top configs by Sharpe clustered around `MIN_AH_MOVE_PCT=0.05`, `HOLD_DAYS=5`. Th
 
 ---
 
+## Success Criteria
+
+| Metric | Minimum | Good | Actual (corrected) |
+|---|---|---|---|
+| Win rate | >45% | >55% | 54.8% ≈ |
+| Expectancy | >$0 | >$50 | +$197/trade ✓ |
+| Sharpe (annl.) | >0.5 | >1.0 | 1.08 ✓ |
+| Max drawdown | <30% capital | <15% | $9,100 ✓ |
+| Trades in window | >150 | >300 | 168 ✓ |
+
+Out-of-sample degradation allowance: <30% vs in-sample. Actual: ~flat.
+
+---
+
+## Diagnosing Poor Results
+
+| Outcome | Diagnosis |
+|---|---|
+| Win rate <40%, losses within 1–2 days | Stop too tight — test wider ATR multiplier |
+| Win rate ok, avg win << avg loss | Holding too long into reversals — test shorter `HOLD_DAYS` |
+| Too few trades (<100 in 3 years) | Filters too restrictive — overnight gap threshold likely culprit |
+| Out-of-sample degrades badly | Overfit — revert to default config, don't tune |
+
+---
+
 ## Known Limitations
 
 | Issue | Status |
