@@ -33,9 +33,11 @@ from backtest.data import (
     get_trading_dates,
     get_ohlcv_range,
     get_close_on_date,
+    get_open_on_date,
     get_atr_as_of,
     get_prior_runup_as_of,
     get_ah_proxy,
+    get_ah_entry_price_fmp,
     get_historical_earnings_calendar,
     get_historical_surprise,
     get_exchange_cached,
@@ -218,14 +220,8 @@ def run_backtest(
             if len(positions) >= cfg["MAX_POSITIONS"]:
                 break
 
-            # FMP historical earnings-calendar does not include a 'time' field
-            # (AMC/BMO), so we process all tickers and enter at the date's close.
-            # For AMC tickers this is correct. For BMO tickers it means entering
-            # at the close of the reporting day (after the market has already
-            # priced in earnings), which is a slightly pessimistic entry vs.
-            # production (which enters at ~10 AM). The AH proxy still works:
-            # next-day open vs reporting-day close captures post-announcement drift.
             ticker = record.get("symbol", "")
+            timing = record.get("time", "").lower()  # "amc", "bmo", "dmh", or ""
             if not ticker:
                 continue
 
@@ -236,13 +232,27 @@ def run_backtest(
                     continue
 
                 df = get_ohlcv_range(ticker, start_date, end_date)
-                entry_price = get_close_on_date(df, date)
                 atr = get_atr_as_of(df, date)
                 prior_runup = get_prior_runup_as_of(df, date)
 
-                # AH/premarket proxy: next-day open vs earnings-date close
-                # (same formula for both AMC and BMO since we only have daily bars)
-                ah_move = get_ah_proxy(df, date)
+                if timing == "bmo":
+                    # BMO: enter at same-day open (first price after earnings public)
+                    # AH move proxy = open / prior close - 1
+                    entry_price = get_open_on_date(df, date)
+                    prior_close_rows = df[df.index.strftime("%Y-%m-%d") < date]
+                    if prior_close_rows.empty:
+                        raise ValueError(f"No prior close for {ticker} before {date}")
+                    prior_close = float(prior_close_rows["Close"].iloc[-1])
+                    ah_move = (entry_price / prior_close) - 1.0
+                else:
+                    # AMC (or unknown timing): enter at AH price ~4:15 PM
+                    # AH move = AH price / regular close - 1
+                    reg_close = get_close_on_date(df, date)
+                    try:
+                        entry_price = get_ah_entry_price_fmp(ticker, date)
+                    except Exception:
+                        entry_price = reg_close  # fallback if FMP AH data unavailable
+                    ah_move = (entry_price / reg_close) - 1.0
 
                 # Sector move
                 etf = get_sector_etf_cached(ticker)

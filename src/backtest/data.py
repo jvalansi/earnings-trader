@@ -167,15 +167,19 @@ def get_sector_move_on_date(etf: str, etf_df: pd.DataFrame, date: str) -> float:
 # ---------------------------------------------------------------------------
 
 def get_historical_earnings_calendar(date: str) -> list[dict]:
-    """Return raw FMP earnings calendar for date, with disk caching."""
+    """Return FMP earnings calendar for date with AMC/BMO timing, disk-cached.
+
+    Uses the v3 endpoint which includes the 'time' field (amc/bmo/dmh).
+    Cache key uses '_v3' suffix to avoid serving stale v1 cache.
+    """
     _ensure_cache_dir()
-    cache_path = CACHE_DIR / f"earnings_{date}.json"
+    cache_path = CACHE_DIR / f"earnings_v3_{date}.json"
 
     if cache_path.exists():
         with cache_path.open("r") as f:
             return json.load(f)
 
-    url = "https://financialmodelingprep.com/stable/earnings-calendar"
+    url = "https://financialmodelingprep.com/api/v3/earning_calendar"
     resp = requests.get(
         url, params={"from": date, "to": date, "apikey": FMP_API_KEY}, timeout=15
     )
@@ -187,6 +191,42 @@ def get_historical_earnings_calendar(date: str) -> list[dict]:
 
     logger.info(f"FMP earnings for {date}: {len(records)} tickers")
     return records
+
+
+def get_ah_entry_price_fmp(ticker: str, date: str) -> float:
+    """Return AH entry price for AMC earnings: close price of the 16:15 5-min bar.
+
+    Fetches FMP 5-min extended-hours data and returns the bar at 16:15 ET,
+    matching what production sees at the 4:15 PM scan.
+    Falls back to the last available bar between 16:00–16:30 if 16:15 is missing.
+    """
+    _ensure_cache_dir()
+    cache_path = CACHE_DIR / f"ah_entry_{ticker}_{date}.json"
+
+    if cache_path.exists():
+        with cache_path.open("r") as f:
+            return json.load(f)["price"]
+
+    url = f"https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}"
+    resp = requests.get(
+        url, params={"from": date, "to": date, "extended": "true", "apikey": FMP_API_KEY}, timeout=15
+    )
+    resp.raise_for_status()
+    bars = resp.json()
+
+    # Filter to 16:00–16:30 window on the earnings date
+    window = [b for b in bars if b["date"].startswith(date) and "16:" in b["date"][:16] and b["date"][11:16] <= "16:30"]
+    if not window:
+        raise ValueError(f"No AH bars for {ticker} on {date}")
+
+    # Prefer 16:15, otherwise take latest available in window
+    target = next((b for b in window if b["date"][11:16] == "16:15"), None)
+    price = float(target["close"] if target else window[0]["close"])
+
+    with cache_path.open("w") as f:
+        json.dump({"price": price}, f)
+
+    return price
 
 
 def get_historical_surprise(ticker: str, date: str) -> EarningsSurprise:
