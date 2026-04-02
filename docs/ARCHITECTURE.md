@@ -1,5 +1,45 @@
 # Architecture
 
+## Module Diagram
+
+```mermaid
+graph TD
+    main["main.py"] --> scheduler["scheduler.py"]
+
+    subgraph data["Data Layer"]
+        prices["data/prices.py<br/>(yfinance)"]
+        earnings["data/earnings.py<br/>(FMP)"]
+        sector["data/sector.py<br/>(yfinance)"]
+    end
+
+    subgraph core["Core"]
+        config["config.py"]
+        state["state.py<br/>(positions.json)"]
+        decision["decision.py"]
+        execution["execution.py<br/>(trades_log.jsonl)"]
+    end
+
+    notifier["notifier.py<br/>(Slack)"]
+
+    scheduler --> prices
+    scheduler --> earnings
+    scheduler --> sector
+    scheduler --> decision
+    scheduler --> execution
+    scheduler --> state
+    scheduler --> notifier
+
+    prices --> decision
+    earnings --> decision
+    sector --> decision
+    state --> decision
+    config --> decision
+    config --> scheduler
+
+    decision --> execution
+    execution --> state
+```
+
 ## Data Flow
 
 ```
