@@ -3,7 +3,6 @@ Backtest runner. Replays the PEAD strategy over historical earnings events.
 
 Usage:
     PYTHONPATH=src python src/backtest/runner.py --start 2022-01-01 --end 2024-12-31
-    PYTHONPATH=src python src/backtest/runner.py --start 2026-02-01 --end 2026-03-31  # fidelity check
 
 Output:
     list[SimTrade] — one record per completed trade.
@@ -12,21 +11,21 @@ Output:
 Config overrides:
     Pass a dict of config key overrides to run_backtest() for sensitivity analysis.
     E.g. {"ATR_STOP_MULTIPLIER": 3.0, "MIN_AH_MOVE_PCT": 0.05}
-    These override the production config values for the duration of the run.
+    These are passed directly to evaluate_entry() / evaluate_positions().
 
 Design notes:
-    - Entry/exit filter logic is inlined (mirrors decision.py) so that config
-      overrides apply cleanly without patching the production module.
+    - Uses evaluate_entry() and evaluate_positions() from decision.py directly,
+      so backtest and production share identical logic with no duplication.
+    - Entry price and AH move signal both use next-trading-day open vs prior close,
+      matching the production approach of entering at market open after confirming
+      the overnight gap. No AMC/BMO distinction needed.
     - ETF OHLCV for all 12 sector ETFs + SPY is preloaded for the full date
       range to avoid repeated yfinance calls in the inner loop.
     - All FMP and yfinance calls are disk-cached via backtest/data.py.
-    - BMO earnings are included: AH proxy for BMO = same-day open vs prior close.
 """
 import argparse
 import logging
-import sys
 from dataclasses import dataclass
-from datetime import datetime
 
 import config as _cfg
 from backtest.data import (
@@ -36,8 +35,6 @@ from backtest.data import (
     get_open_on_date,
     get_atr_as_of,
     get_prior_runup_as_of,
-    get_ah_proxy,
-    get_ah_entry_price_fmp,
     get_historical_earnings_calendar,
     get_historical_surprise,
     get_exchange_cached,
@@ -45,6 +42,8 @@ from backtest.data import (
     get_sector_move_on_date,
 )
 from data.sector import SECTOR_ETF_MAP, FALLBACK_ETF
+from decision import evaluate_entry, evaluate_positions
+from state import Position
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -53,16 +52,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
-
-@dataclass
-class SimPosition:
-    ticker: str
-    entry_date: str
-    entry_price: float
-    current_stop: float
-    day_count: int
-    quantity: int
-
 
 @dataclass
 class SimTrade:
@@ -78,70 +67,8 @@ class SimTrade:
 
 
 # ---------------------------------------------------------------------------
-# Inline entry/exit logic (mirrors decision.py; inlined so config overrides work)
-# ---------------------------------------------------------------------------
-
-def _should_enter(surprise, ah_move, prior_runup, sector_move, n_positions, cfg):
-    """Return (should_enter: bool, filters: dict)."""
-    filters = {
-        "eps_beat":    surprise.eps_beat_pct >= cfg["MIN_EPS_BEAT_PCT"],
-        "rev_beat":    surprise.rev_beat_pct > 0,
-        "ah_move":     ah_move >= cfg["MIN_AH_MOVE_PCT"],
-        "prior_runup": prior_runup <= cfg["MAX_PRIOR_RUNUP_PCT"],
-        "sector_etf":  sector_move > cfg["SECTOR_ETF_MIN"],
-        "guidance":    True if surprise.guidance_weak is None else not surprise.guidance_weak,
-        "capacity":    n_positions < cfg["MAX_POSITIONS"],
-    }
-    return all(filters.values()), filters
-
-
-def _close_position(pos: SimPosition, date: str, price: float, reason: str) -> SimTrade:
-    pnl_usd = (price - pos.entry_price) * pos.quantity
-    pnl_pct = (price / pos.entry_price) - 1.0
-    return SimTrade(
-        ticker=pos.ticker,
-        entry_date=pos.entry_date,
-        exit_date=date,
-        entry_price=pos.entry_price,
-        exit_price=price,
-        exit_reason=reason,
-        pnl_usd=round(pnl_usd, 2),
-        pnl_pct=round(pnl_pct, 4),
-        days_held=pos.day_count,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
-
-# Backtest-specific defaults that differ from production config.
-# MIN_AH_MOVE_PCT is disabled (0.0) because yfinance 1m intraday data is only
-# available for the last 7 days — true historical AH moves are not fetchable.
-# The next-day-open proxy is unreliable (it captures the full overnight gap
-# including pre-market, which can invert the AH signal on market-wide moves).
-# The AH filter's value vs. redundancy is itself a research question this
-# backtest helps answer.
-BACKTEST_DEFAULTS = {
-    "MIN_AH_MOVE_PCT": 0.0,
-}
-
-
-def _build_cfg(overrides: dict) -> dict:
-    """Return a config dict from production config, with backtest defaults and optional overrides."""
-    base = {**BACKTEST_DEFAULTS, **overrides}
-    return {
-        "MIN_EPS_BEAT_PCT":    base.get("MIN_EPS_BEAT_PCT",    _cfg.MIN_EPS_BEAT_PCT),
-        "MIN_AH_MOVE_PCT":     base.get("MIN_AH_MOVE_PCT",     _cfg.MIN_AH_MOVE_PCT),
-        "MAX_PRIOR_RUNUP_PCT": base.get("MAX_PRIOR_RUNUP_PCT", _cfg.MAX_PRIOR_RUNUP_PCT),
-        "SECTOR_ETF_MIN":      base.get("SECTOR_ETF_MIN",      _cfg.SECTOR_ETF_MIN),
-        "ATR_STOP_MULTIPLIER": base.get("ATR_STOP_MULTIPLIER", _cfg.ATR_STOP_MULTIPLIER),
-        "HOLD_DAYS":           base.get("HOLD_DAYS",           _cfg.HOLD_DAYS),
-        "MAX_POSITIONS":       base.get("MAX_POSITIONS",       _cfg.MAX_POSITIONS),
-        "POSITION_SIZE_USD":   base.get("POSITION_SIZE_USD",   _cfg.POSITION_SIZE_USD),
-        "ALLOWED_EXCHANGES":   base.get("ALLOWED_EXCHANGES",   _cfg.ALLOWED_EXCHANGES),
-    }
-
 
 def run_backtest(
     start_date: str,
@@ -153,13 +80,26 @@ def run_backtest(
     Args:
         start_date: 'YYYY-MM-DD' inclusive
         end_date:   'YYYY-MM-DD' inclusive
-        config_overrides: dict of config keys to override (for sweep)
+        config_overrides: dict of config keys to override (for sweep).
+            Supported keys: MIN_EPS_BEAT_PCT, MIN_AH_MOVE_PCT, MAX_PRIOR_RUNUP_PCT,
+            SECTOR_ETF_MIN, ATR_STOP_MULTIPLIER, HOLD_DAYS, MAX_POSITIONS,
+            POSITION_SIZE_USD, ALLOWED_EXCHANGES.
 
     Returns:
         list[SimTrade] — one per completed trade (open positions at end_date
         are closed at last available price with reason='backtest_end').
     """
-    cfg = _build_cfg(config_overrides)
+    cfg = {
+        "MIN_EPS_BEAT_PCT":    config_overrides.get("MIN_EPS_BEAT_PCT",    _cfg.MIN_EPS_BEAT_PCT),
+        "MIN_AH_MOVE_PCT":     config_overrides.get("MIN_AH_MOVE_PCT",     _cfg.MIN_AH_MOVE_PCT),
+        "MAX_PRIOR_RUNUP_PCT": config_overrides.get("MAX_PRIOR_RUNUP_PCT", _cfg.MAX_PRIOR_RUNUP_PCT),
+        "SECTOR_ETF_MIN":      config_overrides.get("SECTOR_ETF_MIN",      _cfg.SECTOR_ETF_MIN),
+        "ATR_STOP_MULTIPLIER": config_overrides.get("ATR_STOP_MULTIPLIER", _cfg.ATR_STOP_MULTIPLIER),
+        "HOLD_DAYS":           config_overrides.get("HOLD_DAYS",           _cfg.HOLD_DAYS),
+        "MAX_POSITIONS":       config_overrides.get("MAX_POSITIONS",       _cfg.MAX_POSITIONS),
+        "POSITION_SIZE_USD":   config_overrides.get("POSITION_SIZE_USD",   _cfg.POSITION_SIZE_USD),
+        "ALLOWED_EXCHANGES":   config_overrides.get("ALLOWED_EXCHANGES",   _cfg.ALLOWED_EXCHANGES),
+    }
 
     # Preload ETF OHLCV for all sector ETFs (avoids per-ticker inner-loop fetches)
     all_etfs = set(SECTOR_ETF_MAP.values()) | {FALLBACK_ETF}
@@ -174,35 +114,50 @@ def run_backtest(
     trading_dates = get_trading_dates(start_date, end_date)
     logger.info(f"Backtesting {len(trading_dates)} trading days ({start_date} → {end_date})")
 
-    positions: list[SimPosition] = []
+    positions: list[Position] = []
     trades: list[SimTrade] = []
 
     for date in trading_dates:
         # --- Update existing positions ---
-        still_open = []
+        current_prices = {}
+        current_atrs = {}
         for pos in positions:
             pos.day_count += 1
             try:
                 df = get_ohlcv_range(pos.ticker, start_date, end_date)
-                close = get_close_on_date(df, date)
-                atr = get_atr_as_of(df, date)
+                current_prices[pos.ticker] = get_close_on_date(df, date)
+                current_atrs[pos.ticker] = get_atr_as_of(df, date)
             except Exception:
+                pass
+
+        actions = evaluate_positions(
+            positions, current_prices, current_atrs,
+            atr_stop_multiplier=cfg["ATR_STOP_MULTIPLIER"],
+            hold_days=cfg["HOLD_DAYS"],
+        )
+
+        still_open = []
+        for pos, action in zip(positions, actions):
+            if action.action == "sell":
+                price = current_prices.get(pos.ticker, pos.entry_price)
+                pnl_usd = round((price - pos.entry_price) * pos.quantity, 2)
+                pnl_pct = round((price / pos.entry_price) - 1.0, 4)
+                trades.append(SimTrade(
+                    ticker=pos.ticker,
+                    entry_date=pos.entry_date,
+                    exit_date=date,
+                    entry_price=pos.entry_price,
+                    exit_price=price,
+                    exit_reason=action.reason,
+                    pnl_usd=pnl_usd,
+                    pnl_pct=pnl_pct,
+                    days_held=pos.day_count,
+                ))
+            elif action.action == "update_stop":
+                pos.current_stop = action.new_stop
                 still_open.append(pos)
-                continue
-
-            if close <= pos.current_stop:
-                trades.append(_close_position(pos, date, close, "stop_hit"))
-                continue
-
-            if pos.day_count >= cfg["HOLD_DAYS"]:
-                trades.append(_close_position(pos, date, close, "max_days_reached"))
-                continue
-
-            new_stop = close - (cfg["ATR_STOP_MULTIPLIER"] * atr)
-            if new_stop > pos.current_stop:
-                pos.current_stop = new_stop
-
-            still_open.append(pos)
+            else:
+                still_open.append(pos)
 
         positions = still_open
 
@@ -221,12 +176,10 @@ def run_backtest(
                 break
 
             ticker = record.get("symbol", "")
-            timing = record.get("time", "").lower()  # "amc", "bmo", "dmh", or ""
             if not ticker:
                 continue
 
             try:
-                # Exchange filter
                 exchange = get_exchange_cached(ticker)
                 if exchange not in cfg["ALLOWED_EXCHANGES"]:
                     continue
@@ -235,49 +188,49 @@ def run_backtest(
                 atr = get_atr_as_of(df, date)
                 prior_runup = get_prior_runup_as_of(df, date)
 
-                if timing == "bmo":
-                    # BMO: enter at same-day open (first price after earnings public)
-                    # AH move proxy = open / prior close - 1
-                    entry_price = get_open_on_date(df, date)
-                    prior_close_rows = df[df.index.strftime("%Y-%m-%d") < date]
-                    if prior_close_rows.empty:
-                        raise ValueError(f"No prior close for {ticker} before {date}")
-                    prior_close = float(prior_close_rows["Close"].iloc[-1])
-                    ah_move = (entry_price / prior_close) - 1.0
-                else:
-                    # AMC (or unknown timing): enter at AH price ~4:15 PM
-                    # AH move = AH price / regular close - 1
-                    reg_close = get_close_on_date(df, date)
-                    try:
-                        entry_price = get_ah_entry_price_fmp(ticker, date)
-                    except Exception:
-                        entry_price = reg_close  # fallback if FMP AH data unavailable
-                    ah_move = (entry_price / reg_close) - 1.0
+                # Entry price and AH signal: next-day open vs earnings-date close.
+                # Matches production (market order at 9:30 AM after overnight gap confirmed).
+                reg_close = get_close_on_date(df, date)
+                next_rows = df[df.index.strftime("%Y-%m-%d") > date]
+                if next_rows.empty:
+                    continue
+                entry_price = float(next_rows["Open"].iloc[0])
+                ah_move = (entry_price / reg_close) - 1.0
 
-                # Sector move
                 etf = get_sector_etf_cached(ticker)
                 etf_df = etf_dfs.get(etf, etf_dfs.get(FALLBACK_ETF))
                 if etf_df is None:
                     continue
                 sector_move = get_sector_move_on_date(etf, etf_df, date)
 
-                # Earnings surprise
                 surprise = get_historical_surprise(ticker, date)
 
-                # Entry decision
-                enter, _ = _should_enter(
-                    surprise, ah_move, prior_runup, sector_move,
-                    len(positions), cfg,
+                # Use evaluate_entry() from decision.py directly
+                signal = evaluate_entry(
+                    ticker=ticker,
+                    surprise=surprise,
+                    ah_move=ah_move,
+                    prior_runup=prior_runup,
+                    sector_move=sector_move,
+                    atr=atr,
+                    current_price=entry_price,
+                    open_positions=positions,
+                    min_eps_beat_pct=cfg["MIN_EPS_BEAT_PCT"],
+                    min_ah_move_pct=cfg["MIN_AH_MOVE_PCT"],
+                    max_prior_runup_pct=cfg["MAX_PRIOR_RUNUP_PCT"],
+                    sector_etf_min=cfg["SECTOR_ETF_MIN"],
+                    atr_stop_multiplier=cfg["ATR_STOP_MULTIPLIER"],
+                    max_positions=cfg["MAX_POSITIONS"],
                 )
-                if not enter:
+                if not signal.should_enter:
                     continue
 
                 quantity = max(1, int(cfg["POSITION_SIZE_USD"] / entry_price))
-                positions.append(SimPosition(
+                positions.append(Position(
                     ticker=ticker,
                     entry_date=date,
                     entry_price=entry_price,
-                    current_stop=entry_price - (cfg["ATR_STOP_MULTIPLIER"] * atr),
+                    current_stop=signal.initial_stop,
                     day_count=0,
                     quantity=quantity,
                 ))
@@ -292,7 +245,19 @@ def run_backtest(
         try:
             df = get_ohlcv_range(pos.ticker, start_date, end_date)
             close = get_close_on_date(df, trading_dates[-1])
-            trades.append(_close_position(pos, trading_dates[-1], close, "backtest_end"))
+            pnl_usd = round((close - pos.entry_price) * pos.quantity, 2)
+            pnl_pct = round((close / pos.entry_price) - 1.0, 4)
+            trades.append(SimTrade(
+                ticker=pos.ticker,
+                entry_date=pos.entry_date,
+                exit_date=trading_dates[-1],
+                entry_price=pos.entry_price,
+                exit_price=close,
+                exit_reason="backtest_end",
+                pnl_usd=pnl_usd,
+                pnl_pct=pnl_pct,
+                days_held=pos.day_count,
+            ))
         except Exception:
             pass
 

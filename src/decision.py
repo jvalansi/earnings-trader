@@ -51,18 +51,25 @@ def evaluate_entry(
     atr: float,
     current_price: float,
     open_positions: list[Position],
+    min_eps_beat_pct: float = MIN_EPS_BEAT_PCT,
+    min_ah_move_pct: float = MIN_AH_MOVE_PCT,
+    max_prior_runup_pct: float = MAX_PRIOR_RUNUP_PCT,
+    sector_etf_min: float = SECTOR_ETF_MIN,
+    atr_stop_multiplier: float = ATR_STOP_MULTIPLIER,
+    max_positions: int = MAX_POSITIONS,
 ) -> EntrySignal:
     """Evaluate all six entry filters and return a signal.
 
     Returns EntrySignal with should_enter=False if MAX_POSITIONS is already reached.
+    Thresholds default to production config values but can be overridden (e.g. for backtesting).
     """
     filters: dict[str, bool] = {}
 
-    filters["eps_beat"] = surprise.eps_beat_pct >= MIN_EPS_BEAT_PCT
+    filters["eps_beat"] = surprise.eps_beat_pct >= min_eps_beat_pct
     filters["rev_beat"] = surprise.rev_beat_pct > 0
-    filters["ah_move"] = ah_move >= MIN_AH_MOVE_PCT
-    filters["prior_runup"] = prior_runup <= MAX_PRIOR_RUNUP_PCT
-    filters["sector_etf"] = sector_move > SECTOR_ETF_MIN
+    filters["ah_move"] = ah_move >= min_ah_move_pct
+    filters["prior_runup"] = prior_runup <= max_prior_runup_pct
+    filters["sector_etf"] = sector_move > sector_etf_min
 
     # Guidance: skip filter if data unavailable (treat as passing)
     if surprise.guidance_weak is None:
@@ -70,10 +77,10 @@ def evaluate_entry(
     else:
         filters["guidance"] = not surprise.guidance_weak
 
-    filters["capacity"] = len(open_positions) < MAX_POSITIONS
+    filters["capacity"] = len(open_positions) < max_positions
 
     if all(filters.values()):
-        initial_stop = current_price - (ATR_STOP_MULTIPLIER * atr)
+        initial_stop = current_price - (atr_stop_multiplier * atr)
         return EntrySignal(
             ticker=ticker,
             should_enter=True,
@@ -95,8 +102,13 @@ def evaluate_positions(
     positions: list[Position],
     current_prices: dict[str, float],
     current_atrs: dict[str, float],
+    atr_stop_multiplier: float = ATR_STOP_MULTIPLIER,
+    hold_days: int = HOLD_DAYS,
 ) -> list[PositionAction]:
-    """Evaluate each open position and return the appropriate action for each."""
+    """Evaluate each open position and return the appropriate action for each.
+
+    Thresholds default to production config values but can be overridden (e.g. for backtesting).
+    """
     actions = []
 
     for pos in positions:
@@ -120,7 +132,7 @@ def evaluate_positions(
             ))
             continue
 
-        if pos.day_count >= HOLD_DAYS:
+        if pos.day_count >= hold_days:
             actions.append(PositionAction(
                 ticker=pos.ticker,
                 action="sell",
@@ -132,7 +144,7 @@ def evaluate_positions(
         # Only raise the stop, never lower it
         atr = current_atrs.get(pos.ticker)
         if atr is not None:
-            new_stop = price - (ATR_STOP_MULTIPLIER * atr)
+            new_stop = price - (atr_stop_multiplier * atr)
             if new_stop > pos.current_stop:
                 actions.append(PositionAction(
                     ticker=pos.ticker,

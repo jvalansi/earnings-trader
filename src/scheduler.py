@@ -13,8 +13,8 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify
 from data.earnings import get_earnings_calendar_details, get_earnings_surprise
-from data.prices import get_ohlcv, get_atr, get_ah_move, get_premarket_move, get_prior_runup
-from data.sector import get_sector_move, get_sector_intraday_move
+from data.prices import get_ohlcv, get_atr, get_prior_runup
+from data.sector import get_sector_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
@@ -24,47 +24,53 @@ EASTERN = pytz.timezone("US/Eastern")
 
 
 def run_scan_cycle(mode: str = "paper") -> None:
-    """4:15 PM ET — scan today's earnings for entry signals using AH move.
+    """9:30 AM ET — scan yesterday's (AMC) and today's (BMO) earnings using overnight gap.
 
-    1. Fetch today's full earnings calendar
-    2. For each ticker: fetch surprise, AH move, prior run-up, sector move, ATR
-    3. Evaluate entry signal against all 6 filters
+    Entry signal: overnight gap = (current open / prior close) - 1 >= MIN_AH_MOVE_PCT.
+    Market order submitted at open — no AH trading needed.
+
+    1. Fetch yesterday's earnings calendar (AMC) + today's (BMO)
+    2. For each ticker: fetch surprise, overnight gap, prior run-up, sector move, ATR
+    3. Evaluate entry signal against all filters
     4. Execute BUY orders for passing signals
     """
-    today = datetime.now(EASTERN).strftime("%Y-%m-%d")
+    eastern_now = datetime.now(EASTERN)
+    today = eastern_now.strftime("%Y-%m-%d")
+    yesterday = (eastern_now - timedelta(days=1)).strftime("%Y-%m-%d")
     logger.info(f"=== Scan Cycle: {today} ===")
 
     try:
-        all_entries = get_earnings_calendar_details(today)
-        all_entries = [e for e in all_entries if e.eps_estimate is not None]
+        # AMC from yesterday + BMO from today
+        entries_amc = get_earnings_calendar_details(yesterday)
+        entries_bmo = get_earnings_calendar_details(today)
+        all_entries = [e for e in entries_amc + entries_bmo if e.eps_estimate is not None]
         tickers = _filter_us_exchange([e.ticker for e in all_entries])
     except Exception as e:
         logger.error(f"Failed to fetch earnings calendar: {e}", exc_info=True)
         return
 
     if not tickers:
-        logger.info("No earnings today.")
+        logger.info("No earnings to scan.")
         return
 
     open_positions = load_positions()
     signals = []
-    move_pcts: dict[str, float] = {}
-    eps_beat_pcts: dict[str, float] = {}
 
     for ticker in tickers:
         try:
             surprise = get_earnings_surprise(ticker, date=today)
-            ah_move = get_ah_move(ticker, today)
             prior_runup = get_prior_runup(ticker)
             sector_move = get_sector_move(ticker, today)
             atr = get_atr(ticker)
-            df = get_ohlcv(ticker, days=1)
+            df = get_ohlcv(ticker, days=2)
             current_price = float(df["Close"].iloc[-1])
+            prior_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else current_price
+            overnight_gap = (current_price / prior_close) - 1.0
 
             sig = evaluate_entry(
                 ticker=ticker,
                 surprise=surprise,
-                ah_move=ah_move,
+                ah_move=overnight_gap,
                 prior_runup=prior_runup,
                 sector_move=sector_move,
                 atr=atr,
@@ -72,17 +78,14 @@ def run_scan_cycle(mode: str = "paper") -> None:
                 open_positions=open_positions,
             )
             signals.append(sig)
-            move_pcts[ticker] = ah_move
-            eps_beat_pcts[ticker] = surprise.eps_beat_pct
-            logger.info(f"{ticker}: should_enter={sig.should_enter}, filters={sig.filters_passed}")
+            logger.info(f"{ticker}: should_enter={sig.should_enter}, gap={overnight_gap:.1%}, filters={sig.filters_passed}")
 
         except Exception as e:
-            logger.error(f"Error processing {ticker} in scan cycle: {e}", exc_info=True)
+            logger.error(f"Error processing {ticker}: {e}", exc_info=True)
             continue
 
     execute_signals(signals, [], mode=mode)
 
-    # Slack summary
     if signals:
         lines = [f"*Earnings Scan — {today}* ({len(tickers)} tickers)"]
         keys = list(signals[0].filters_passed.keys())
@@ -98,85 +101,6 @@ def run_scan_cycle(mode: str = "paper") -> None:
         notify("\n".join(lines))
     else:
         notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
-
-
-
-def run_bmo_scan_cycle(mode: str = "paper") -> None:
-    """10:00 AM ET — scan today's earnings for entry signals using pre-market move.
-
-    Mirrors run_scan_cycle but uses pre-market move instead of AH move.
-    1. Fetch today's full earnings calendar
-    2. For each ticker: fetch surprise, pre-market move, prior run-up, sector move, ATR
-    3. Evaluate entry signal against all 6 filters
-    4. Execute BUY orders for passing signals
-    """
-    today = datetime.now(EASTERN).strftime("%Y-%m-%d")
-    logger.info(f"=== BMO Scan Cycle: {today} ===")
-
-    try:
-        all_entries = get_earnings_calendar_details(today)
-        all_entries = [e for e in all_entries if e.eps_estimate is not None]
-        tickers = _filter_us_exchange([e.ticker for e in all_entries])
-    except Exception as e:
-        logger.error(f"Failed to fetch BMO earnings calendar: {e}", exc_info=True)
-        return
-
-    if not tickers:
-        logger.info("No earnings today.")
-        return
-
-    open_positions = load_positions()
-    signals = []
-    move_pcts: dict[str, float] = {}
-    eps_beat_pcts: dict[str, float] = {}
-
-    for ticker in tickers:
-        try:
-            surprise = get_earnings_surprise(ticker, date=today)
-            pm_move = get_premarket_move(ticker, today)
-            prior_runup = get_prior_runup(ticker)
-            sector_move = get_sector_intraday_move(ticker, today)
-            atr = get_atr(ticker)
-            df = get_ohlcv(ticker, days=1)
-            current_price = float(df["Close"].iloc[-1])
-
-            sig = evaluate_entry(
-                ticker=ticker,
-                surprise=surprise,
-                ah_move=pm_move,
-                prior_runup=prior_runup,
-                sector_move=sector_move,
-                atr=atr,
-                current_price=current_price,
-                open_positions=open_positions,
-            )
-            signals.append(sig)
-            move_pcts[ticker] = pm_move
-            eps_beat_pcts[ticker] = surprise.eps_beat_pct
-            logger.info(f"{ticker}: should_enter={sig.should_enter}, filters={sig.filters_passed}")
-
-        except Exception as e:
-            logger.error(f"Error processing {ticker} in BMO scan cycle: {e}", exc_info=True)
-            continue
-
-    execute_signals(signals, [], mode=mode)
-
-    # Slack summary
-    if signals:
-        lines = [f"*BMO Earnings Scan — {today}* ({len(tickers)} tickers)"]
-        keys = list(signals[0].filters_passed.keys())
-        lines.append("  " + " | ".join(keys))
-        max_ticker_len = max(len(sig.ticker) for sig in signals)
-        for sig in signals:
-            checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
-            ticker_col = sig.ticker.ljust(max_ticker_len)
-            if sig.should_enter:
-                lines.append(f"📈 `{ticker_col}` — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
-            else:
-                lines.append(f"➖ `{ticker_col}`  {checks}")
-        notify("\n".join(lines))
-    else:
-        notify(f"*BMO Earnings Scan — {today}*: no tickers evaluated.")
 
 
 
@@ -432,24 +356,14 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
 
     scheduler = BlockingScheduler(timezone=EASTERN)
     scheduler.add_job(
-        run_bmo_scan_cycle,
-        trigger="cron",
-        hour=10,
-        minute=0,
-        kwargs={"mode": mode},
-        id="bmo_scan_cycle",
-        name="BMO Earnings Scan @ 10:00 AM ET",
-        misfire_grace_time=1,
-    )
-    scheduler.add_job(
         run_scan_cycle,
         trigger="cron",
-        hour=16,
-        minute=15,
+        hour=9,
+        minute=30,
         kwargs={"mode": mode},
         id="scan_cycle",
-        name="Earnings Scan @ 4:15 PM ET",
-        misfire_grace_time=1,
+        name="Earnings Scan @ 9:30 AM ET",
+        misfire_grace_time=60,
     )
     scheduler.add_job(
         run_update_cycle,
@@ -482,8 +396,7 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     )
 
     logger.info(f"Scheduler starting in {mode!r} mode.")
-    logger.info("  BMO scan:          10:00 AM ET (pre-market move + evaluate entries)")
-    logger.info("  Scan cycle:         4:15 PM ET (fetch earnings + evaluate entries)")
+    logger.info("  Scan cycle:         9:30 AM ET (overnight gap + evaluate entries)")
     logger.info("  Update cycle:       4:30 PM ET (manage open positions)")
     logger.info("  Calendar preview:   7:00 PM ET (tomorrow's earnings calendar)")
     logger.info("  Weekly PnL summary: 9:00 AM ET Monday (last week's realized PnL)")
