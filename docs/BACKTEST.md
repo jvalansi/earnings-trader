@@ -23,6 +23,25 @@ Results are saved to `data/backtest_results/`. Data is cached in `data/backtest_
 
 ---
 
+## Module Diagram
+
+```mermaid
+graph TD
+    sweep["sweep.py<br/>(param grid search)"] --> runner["runner.py<br/>(event loop)"]
+    runner --> bdata["backtest/data.py<br/>(FMP v3 + yfinance, disk-cached)"]
+    runner --> decision["decision.py<br/>(evaluate_entry / evaluate_positions)"]
+    runner --> report["report.py<br/>(P&L metrics)"]
+    decision --> config["config.py<br/>(overrideable per run)"]
+
+    bdata --> cache[("data/backtest_cache/")]
+    report --> results[("data/backtest_results/")]
+
+    subgraph shared["Shared with Production"]
+        decision
+        config
+    end
+```
+
 ## File Structure
 
 ```
