@@ -133,7 +133,7 @@ def _print_sweep_table(results: list[dict], top_n: int = 20) -> None:
 
 
 def _save_results(results: list[dict], start_date: str, end_date: str) -> Path:
-    out_dir = Path("data/backtest_results")
+    out_dir = Path(__file__).parent.parent.parent / "data" / "backtest_results"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = out_dir / f"sweep_{ts}.json"

@@ -42,7 +42,7 @@ from data.sector import SECTOR_ETF_MAP, FALLBACK_ETF
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path("data/backtest_cache")
+CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "backtest_cache"
 
 
 def _ensure_cache_dir() -> None:
@@ -55,10 +55,11 @@ def _ensure_cache_dir() -> None:
 
 def get_trading_dates(start: str, end: str) -> list[str]:
     """Return list of market-open trading dates (YYYY-MM-DD) between start and end."""
-    df = yf.Ticker("SPY").history(start=start, end=end, interval="1d", auto_adjust=True)
-    if df.index.tzinfo is not None:
-        df.index = df.index.tz_localize(None)
-    return [d.strftime("%Y-%m-%d") for d in df.index]
+    df = get_ohlcv_range("SPY", start, end)
+    start_dt = datetime.strptime(start, "%Y-%m-%d")
+    end_dt = datetime.strptime(end, "%Y-%m-%d")
+    mask = (df.index >= start_dt) & (df.index <= end_dt)
+    return [d.strftime("%Y-%m-%d") for d in df.index[mask]]
 
 
 def get_ohlcv_range(ticker: str, start: str, end: str) -> pd.DataFrame:

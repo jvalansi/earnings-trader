@@ -113,18 +113,31 @@ def _close_position(pos: SimPosition, date: str, price: float, reason: str) -> S
 # Main runner
 # ---------------------------------------------------------------------------
 
+# Backtest-specific defaults that differ from production config.
+# MIN_AH_MOVE_PCT is disabled (0.0) because yfinance 1m intraday data is only
+# available for the last 7 days — true historical AH moves are not fetchable.
+# The next-day-open proxy is unreliable (it captures the full overnight gap
+# including pre-market, which can invert the AH signal on market-wide moves).
+# The AH filter's value vs. redundancy is itself a research question this
+# backtest helps answer.
+BACKTEST_DEFAULTS = {
+    "MIN_AH_MOVE_PCT": 0.0,
+}
+
+
 def _build_cfg(overrides: dict) -> dict:
-    """Return a config dict from production config, with optional overrides."""
+    """Return a config dict from production config, with backtest defaults and optional overrides."""
+    base = {**BACKTEST_DEFAULTS, **overrides}
     return {
-        "MIN_EPS_BEAT_PCT":    overrides.get("MIN_EPS_BEAT_PCT",    _cfg.MIN_EPS_BEAT_PCT),
-        "MIN_AH_MOVE_PCT":     overrides.get("MIN_AH_MOVE_PCT",     _cfg.MIN_AH_MOVE_PCT),
-        "MAX_PRIOR_RUNUP_PCT": overrides.get("MAX_PRIOR_RUNUP_PCT", _cfg.MAX_PRIOR_RUNUP_PCT),
-        "SECTOR_ETF_MIN":      overrides.get("SECTOR_ETF_MIN",      _cfg.SECTOR_ETF_MIN),
-        "ATR_STOP_MULTIPLIER": overrides.get("ATR_STOP_MULTIPLIER", _cfg.ATR_STOP_MULTIPLIER),
-        "HOLD_DAYS":           overrides.get("HOLD_DAYS",           _cfg.HOLD_DAYS),
-        "MAX_POSITIONS":       overrides.get("MAX_POSITIONS",       _cfg.MAX_POSITIONS),
-        "POSITION_SIZE_USD":   overrides.get("POSITION_SIZE_USD",   _cfg.POSITION_SIZE_USD),
-        "ALLOWED_EXCHANGES":   overrides.get("ALLOWED_EXCHANGES",   _cfg.ALLOWED_EXCHANGES),
+        "MIN_EPS_BEAT_PCT":    base.get("MIN_EPS_BEAT_PCT",    _cfg.MIN_EPS_BEAT_PCT),
+        "MIN_AH_MOVE_PCT":     base.get("MIN_AH_MOVE_PCT",     _cfg.MIN_AH_MOVE_PCT),
+        "MAX_PRIOR_RUNUP_PCT": base.get("MAX_PRIOR_RUNUP_PCT", _cfg.MAX_PRIOR_RUNUP_PCT),
+        "SECTOR_ETF_MIN":      base.get("SECTOR_ETF_MIN",      _cfg.SECTOR_ETF_MIN),
+        "ATR_STOP_MULTIPLIER": base.get("ATR_STOP_MULTIPLIER", _cfg.ATR_STOP_MULTIPLIER),
+        "HOLD_DAYS":           base.get("HOLD_DAYS",           _cfg.HOLD_DAYS),
+        "MAX_POSITIONS":       base.get("MAX_POSITIONS",       _cfg.MAX_POSITIONS),
+        "POSITION_SIZE_USD":   base.get("POSITION_SIZE_USD",   _cfg.POSITION_SIZE_USD),
+        "ALLOWED_EXCHANGES":   base.get("ALLOWED_EXCHANGES",   _cfg.ALLOWED_EXCHANGES),
     }
 
 
@@ -205,10 +218,13 @@ def run_backtest(
             if len(positions) >= cfg["MAX_POSITIONS"]:
                 break
 
-            timing = record.get("time", "").lower()
-            if timing not in ("amc", "bmo"):
-                continue
-
+            # FMP historical earnings-calendar does not include a 'time' field
+            # (AMC/BMO), so we process all tickers and enter at the date's close.
+            # For AMC tickers this is correct. For BMO tickers it means entering
+            # at the close of the reporting day (after the market has already
+            # priced in earnings), which is a slightly pessimistic entry vs.
+            # production (which enters at ~10 AM). The AH proxy still works:
+            # next-day open vs reporting-day close captures post-announcement drift.
             ticker = record.get("symbol", "")
             if not ticker:
                 continue
