@@ -161,7 +161,7 @@ def run_update_cycle(mode: str = "paper") -> None:
             lines.append(f"🔄 `{ticker_col}` — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
         else:
             lines.append(f"⏸ `{ticker_col}` — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
-    notify("\n".join(lines))
+    # Notification silenced — position management runs silently; see scan cycle for daily summary.
 
 
 def run_weekly_pnl_summary() -> None:
@@ -343,8 +343,7 @@ def run_calendar_preview() -> None:
                     f"buy ${pos.entry_price:.2f} | price unavailable | day {pos.day_count}/10"
                 )
 
-    notify("\n".join(lines))
-
+    # Calendar preview notification removed — consolidated into daily scan at 9:30 AM.
 
 
 def start(mode: Literal["paper", "live"] = "paper") -> None:
@@ -387,11 +386,11 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     scheduler.add_job(
         run_weekly_pnl_summary,
         trigger="cron",
-        day_of_week="mon",
+        day_of_week="sun",
         hour=9,
-        minute=0,
+        minute=30,
         id="weekly_pnl_summary",
-        name="Weekly PnL Summary @ 9:00 AM ET Monday",
+        name="Weekly PnL Summary @ 9:30 AM ET Sunday",
         misfire_grace_time=300,
     )
 
@@ -399,5 +398,5 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     logger.info("  Scan cycle:         9:30 AM ET (overnight gap + evaluate entries)")
     logger.info("  Update cycle:       4:30 PM ET (manage open positions)")
     logger.info("  Calendar preview:   7:00 PM ET (tomorrow's earnings calendar)")
-    logger.info("  Weekly PnL summary: 9:00 AM ET Monday (last week's realized PnL)")
+    logger.info("  Weekly PnL summary: 9:30 AM ET Sunday (last week's realized PnL)")
     scheduler.start()
