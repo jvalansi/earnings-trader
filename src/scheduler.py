@@ -24,38 +24,55 @@ EASTERN = pytz.timezone("US/Eastern")
 
 
 def run_scan_cycle(mode: str = "paper") -> None:
-    """9:30 AM ET — scan yesterday's (AMC) and today's (BMO) earnings using overnight gap.
+    """9:30 AM ET — exit/update open positions, then scan for new entries.
 
-    Entry signal: overnight gap = (current open / prior close) - 1 >= MIN_AH_MOVE_PCT.
-    Market order submitted at open — no AH trading needed.
-
-    1. Fetch yesterday's earnings calendar (AMC) + today's (BMO)
-    2. For each ticker: fetch surprise, overnight gap, prior run-up, sector move, ATR
-    3. Evaluate entry signal against all filters
-    4. Execute BUY orders for passing signals
+    1. Increment day_count, evaluate exits and trailing stop updates for open positions
+    2. Execute SELLs for positions that hit stop or max hold days
+    3. Fetch yesterday's (AMC) and today's (BMO) earnings calendar
+    4. For each ticker: fetch surprise, overnight gap, prior run-up, sector move, ATR
+    5. Evaluate entry signal against all filters
+    6. Execute BUY orders for passing signals
+    7. Post a single combined Slack notification
     """
     eastern_now = datetime.now(EASTERN)
     today = eastern_now.strftime("%Y-%m-%d")
     yesterday = (eastern_now - timedelta(days=1)).strftime("%Y-%m-%d")
     logger.info(f"=== Scan Cycle: {today} ===")
 
+    # --- Exit / update open positions ---
+    positions = load_positions()
+    actions = []
+    current_prices: dict[str, float] = {}
+    current_atrs: dict[str, float] = {}
+
+    for pos in positions:
+        pos.day_count += 1
+        try:
+            df = get_ohlcv(pos.ticker, days=1)
+            current_prices[pos.ticker] = float(df["Close"].iloc[-1])
+            current_atrs[pos.ticker] = get_atr(pos.ticker)
+        except Exception as e:
+            logger.error(f"Error fetching data for {pos.ticker}: {e}", exc_info=True)
+
+    if positions:
+        save_positions(positions)
+        actions = evaluate_positions(positions, current_prices, current_atrs)
+        execute_signals([], actions, current_prices=current_prices, mode=mode)
+
+    # Reload after exits so entry evaluation sees accurate open position count
+    open_positions = load_positions()
+
+    # --- Scan for new entries ---
     try:
-        # AMC from yesterday + BMO from today
         entries_amc = get_earnings_calendar_details(yesterday)
         entries_bmo = get_earnings_calendar_details(today)
         all_entries = [e for e in entries_amc + entries_bmo if e.eps_estimate is not None]
         tickers = _filter_us_exchange([e.ticker for e in all_entries])
     except Exception as e:
         logger.error(f"Failed to fetch earnings calendar: {e}", exc_info=True)
-        return
+        tickers = []
 
-    if not tickers:
-        logger.info("No earnings to scan.")
-        return
-
-    open_positions = load_positions()
     signals = []
-
     for ticker in tickers:
         try:
             surprise = get_earnings_surprise(ticker, date=today)
@@ -84,10 +101,36 @@ def run_scan_cycle(mode: str = "paper") -> None:
             logger.error(f"Error processing {ticker}: {e}", exc_info=True)
             continue
 
-    execute_signals(signals, [], mode=mode)
+    if signals:
+        execute_signals(signals, [], mode=mode)
+
+    # --- Combined notification ---
+    lines = [f"*Morning Update — {today}*"]
+
+    action_map = {a.ticker: a for a in actions}
+    if positions:
+        lines.append("\n*Positions*")
+        max_ticker_len = max(len(pos.ticker) for pos in positions)
+        for pos in positions:
+            price = current_prices.get(pos.ticker)
+            act = action_map.get(pos.ticker)
+            price_str = f"${price:.2f}" if price is not None else "n/a"
+            if price is not None:
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                pnl_sign = "+" if pnl_pct >= 0 else ""
+                detail = f"entry ${pos.entry_price:.2f} → {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
+            else:
+                detail = f"entry ${pos.entry_price:.2f} → n/a"
+            ticker_col = pos.ticker.ljust(max_ticker_len)
+            if act and act.action == "sell":
+                lines.append(f"📉 `{ticker_col}` — SELL | {detail} | {act.reason} (day {pos.day_count}/10)")
+            elif act and act.action == "update_stop":
+                lines.append(f"🔄 `{ticker_col}` — hold | {detail} | stop → ${act.new_stop:.2f} (day {pos.day_count}/10)")
+            else:
+                lines.append(f"⏸ `{ticker_col}` — hold | {detail} | stop ${pos.current_stop:.2f} (day {pos.day_count}/10)")
 
     if signals:
-        lines = [f"*Earnings Scan — {today}* ({len(tickers)} tickers)"]
+        lines.append(f"\n*Earnings Scan* ({len(tickers)} tickers)")
         keys = list(signals[0].filters_passed.keys())
         lines.append("  " + " | ".join(keys))
         max_ticker_len = max(len(sig.ticker) for sig in signals)
@@ -98,70 +141,13 @@ def run_scan_cycle(mode: str = "paper") -> None:
                 lines.append(f"📈 `{ticker_col}` — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
                 lines.append(f"➖ `{ticker_col}`  {checks}")
-        notify("\n".join(lines))
+    elif not tickers:
+        lines.append("\n*Earnings Scan*: no tickers evaluated.")
     else:
-        notify(f"*Earnings Scan — {today}*: no tickers evaluated.")
+        lines.append(f"\n*Earnings Scan* ({len(tickers)} tickers): no entries.")
 
+    notify("\n".join(lines))
 
-
-def run_update_cycle(mode: str = "paper") -> None:
-    """4:30 PM ET — evaluate open positions, update stops or exit.
-
-    1. Load open positions
-    2. Increment day_count for each position
-    3. Fetch current prices and ATRs
-    4. Evaluate position actions (hold / sell / update_stop)
-    5. Execute actions
-    """
-    logger.info("=== Update Cycle ===")
-    positions = load_positions()
-
-    if not positions:
-        logger.info("No open positions to manage.")
-        return
-
-    current_prices: dict[str, float] = {}
-    current_atrs: dict[str, float] = {}
-
-    for pos in positions:
-        pos.day_count += 1
-        try:
-            df = get_ohlcv(pos.ticker, days=1)
-            current_prices[pos.ticker] = float(df["Close"].iloc[-1])
-            current_atrs[pos.ticker] = get_atr(pos.ticker)
-        except Exception as e:
-            logger.error(f"Error fetching data for {pos.ticker}: {e}", exc_info=True)
-
-    # Save updated day counts before evaluating
-    save_positions(positions)
-
-    actions = evaluate_positions(positions, current_prices, current_atrs)
-    execute_signals([], actions, current_prices=current_prices, mode=mode)
-
-    # Slack summary
-    today = datetime.now(EASTERN).strftime("%Y-%m-%d")
-    lines = [f"*Position Update — {today}*"]
-    action_map = {a.ticker: a for a in actions}
-    max_ticker_len = max(len(pos.ticker) for pos in positions)
-    for pos in positions:
-        price = current_prices.get(pos.ticker)
-        act = action_map.get(pos.ticker)
-        price_str = f"${price:.2f}" if price is not None else "n/a"
-        entry_str = f"${pos.entry_price:.2f}"
-        if price is not None:
-            pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
-            pnl_sign = "+" if pnl_pct >= 0 else ""
-            price_detail = f"entry {entry_str} → now {price_str} ({pnl_sign}{pnl_pct:.1f}%)"
-        else:
-            price_detail = f"entry {entry_str} → now n/a"
-        ticker_col = pos.ticker.ljust(max_ticker_len)
-        if act and act.action == "sell":
-            lines.append(f"📉 `{ticker_col}` — SOLD @ {price_str} | {price_detail} | {act.reason} (day {pos.day_count}/{10})")
-        elif act and act.action == "update_stop":
-            lines.append(f"🔄 `{ticker_col}` — holding | {price_detail} | stop loss → ${act.new_stop:.2f} (day {pos.day_count}/10)")
-        else:
-            lines.append(f"⏸ `{ticker_col}` — holding | {price_detail} | stop loss ${pos.current_stop:.2f} (day {pos.day_count}/10)")
-    # Notification silenced — position management runs silently; see scan cycle for daily summary.
 
 
 def run_weekly_pnl_summary() -> None:
@@ -298,54 +284,6 @@ def _filter_us_exchange(tickers: list[str]) -> list[str]:
     return sorted(results)
 
 
-def run_calendar_preview() -> None:
-    """7:00 PM ET — post tomorrow's earnings calendar to Slack and Notion."""
-    tomorrow = (datetime.now(EASTERN) + timedelta(days=1)).strftime("%Y-%m-%d")
-    logger.info(f"=== Calendar Preview: {tomorrow} ===")
-
-    try:
-        all_entries = get_earnings_calendar_details(tomorrow)
-        # Only keep entries that have analyst EPS estimates — required for beat evaluation
-        all_entries = [e for e in all_entries if e.eps_estimate is not None]
-        valid_tickers = set(_filter_us_exchange([e.ticker for e in all_entries]))
-        entries = [e for e in all_entries if e.ticker in valid_tickers]
-        tickers = sorted(valid_tickers)
-    except Exception as e:
-        logger.error(f"Failed to fetch calendar for {tomorrow}: {e}", exc_info=True)
-        entries = []
-        tickers = []
-
-    lines = [f"*Earnings Calendar — {tomorrow}*"]
-    if tickers:
-        lines.append(f"{len(tickers)} reporting: {', '.join(tickers)}")
-    else:
-        lines.append("No earnings reporting.")
-
-    # Current holdings with buy price and ROI
-    positions = load_positions()
-    if positions:
-        lines.append("\n*Current Holdings*")
-        for pos in positions:
-            try:
-                df = get_ohlcv(pos.ticker, days=1)
-                current_price = float(df["Close"].iloc[-1])
-                roi_pct = (current_price - pos.entry_price) / pos.entry_price * 100
-                roi_sign = "+" if roi_pct >= 0 else ""
-                lines.append(
-                    f"  • *{pos.ticker}* — {pos.quantity} shares | "
-                    f"buy ${pos.entry_price:.2f} → ${current_price:.2f} "
-                    f"({roi_sign}{roi_pct:.1f}%) | day {pos.day_count}/10"
-                )
-            except Exception as e:
-                logger.warning(f"Could not fetch price for {pos.ticker}: {e}")
-                lines.append(
-                    f"  • *{pos.ticker}* — {pos.quantity} shares | "
-                    f"buy ${pos.entry_price:.2f} | price unavailable | day {pos.day_count}/10"
-                )
-
-    # Calendar preview notification removed — consolidated into daily scan at 9:30 AM.
-
-
 def start(mode: Literal["paper", "live"] = "paper") -> None:
     """Start the APScheduler blocking event loop. Registers both daily cycles."""
     logging.basicConfig(
@@ -365,25 +303,6 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         misfire_grace_time=60,
     )
     scheduler.add_job(
-        run_update_cycle,
-        trigger="cron",
-        hour=16,
-        minute=30,
-        kwargs={"mode": mode},
-        id="update_cycle",
-        name="Position Update @ 4:30 PM ET",
-        misfire_grace_time=1,
-    )
-    scheduler.add_job(
-        run_calendar_preview,
-        trigger="cron",
-        hour=19,
-        minute=0,
-        id="calendar_preview",
-        name="Calendar Preview @ 7:00 PM ET",
-        misfire_grace_time=1,
-    )
-    scheduler.add_job(
         run_weekly_pnl_summary,
         trigger="cron",
         day_of_week="sun",
@@ -395,8 +314,6 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     )
 
     logger.info(f"Scheduler starting in {mode!r} mode.")
-    logger.info("  Scan cycle:         9:30 AM ET (overnight gap + evaluate entries)")
-    logger.info("  Update cycle:       4:30 PM ET (manage open positions)")
-    logger.info("  Calendar preview:   7:00 PM ET (tomorrow's earnings calendar)")
+    logger.info("  Scan cycle:         9:30 AM ET (exit positions + scan entries)")
     logger.info("  Weekly PnL summary: 9:30 AM ET Sunday (last week's realized PnL)")
     scheduler.start()
