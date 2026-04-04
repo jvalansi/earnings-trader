@@ -295,6 +295,7 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     scheduler.add_job(
         run_scan_cycle,
         trigger="cron",
+        day_of_week="mon-fri",
         hour=9,
         minute=30,
         kwargs={"mode": mode},
