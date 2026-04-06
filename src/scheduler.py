@@ -14,7 +14,7 @@ from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify
 from data.earnings import get_earnings_calendar_details, get_earnings_surprise
 from data.prices import get_ohlcv, get_atr, get_prior_runup
-from data.sector import get_sector_move
+from data.sector import get_sector_intraday_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
@@ -77,7 +77,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
         try:
             surprise = get_earnings_surprise(ticker, date=today)
             prior_runup = get_prior_runup(ticker)
-            sector_move = get_sector_move(ticker, today)
+            sector_move = get_sector_intraday_move(ticker, today)
             atr = get_atr(ticker)
             df = get_ohlcv(ticker, days=2)
             current_price = float(df["Close"].iloc[-1])
