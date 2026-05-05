@@ -45,11 +45,14 @@ def run_scan_cycle(mode: str = "paper") -> None:
     current_prices: dict[str, float] = {}
     current_atrs: dict[str, float] = {}
 
+    prev_prices: dict[str, float] = {}
     for pos in positions:
         pos.day_count += 1
         try:
-            df = get_ohlcv(pos.ticker, days=1)
+            df = get_ohlcv(pos.ticker, days=2)
             current_prices[pos.ticker] = float(df["Close"].iloc[-1])
+            if len(df) >= 2:
+                prev_prices[pos.ticker] = float(df["Close"].iloc[-2])
             current_atrs[pos.ticker] = get_atr(pos.ticker)
         except Exception as e:
             logger.error(f"Error fetching data for {pos.ticker}: {e}", exc_info=True)
@@ -109,6 +112,13 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     action_map = {a.ticker: a for a in actions}
     if positions:
+        daily_pnl_total = sum(
+            (current_prices[p.ticker] - prev_prices[p.ticker]) * p.quantity
+            for p in positions
+            if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
+        )
+        daily_sign = "+" if daily_pnl_total >= 0 else ""
+        lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f}*")
         lines.append("\n*Positions*")
         max_ticker_len = max(len(pos.ticker) for pos in positions)
         for pos in positions:
