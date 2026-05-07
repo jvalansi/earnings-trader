@@ -11,7 +11,7 @@ import pytz
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from config import TRADING_MODE, ALLOWED_EXCHANGES
-from notifier import notify
+from notifier import notify, notify_thread
 from data.earnings import get_earnings_calendar_details, get_earnings_surprise
 from data.prices import get_ohlcv, get_atr, get_prior_runup
 from data.sector import get_sector_intraday_move
@@ -139,24 +139,31 @@ def run_scan_cycle(mode: str = "paper") -> None:
             else:
                 lines.append(f"⏸ `{ticker_col}` — hold | {detail} | stop ${pos.current_stop:.2f} (day {pos.day_count}/10)")
 
-    if signals:
-        lines.append(f"\n*Earnings Scan* ({len(tickers)} tickers)")
+    # Count BUY signals for the summary line
+    buys = [s for s in signals if s.should_enter]
+    if buys:
+        lines.append(f"\n*Earnings Scan* ({len(tickers)} tickers): {len(buys)} BUY signal(s) — see thread")
+    elif not tickers:
+        lines.append("\n*Earnings Scan*: no tickers evaluated.")
+    else:
+        lines.append(f"\n*Earnings Scan* ({len(tickers)} tickers): no entries — see thread")
+
+    ts = notify("\n".join(lines))
+
+    # Post full scan detail as a thread reply
+    if signals and ts:
+        scan_lines = [f"*Earnings Scan Detail — {today}* ({len(tickers)} tickers)"]
         keys = list(signals[0].filters_passed.keys())
-        lines.append("  " + " | ".join(keys))
+        scan_lines.append("  " + " | ".join(keys))
         max_ticker_len = max(len(sig.ticker) for sig in signals)
         for sig in signals:
             checks = " ".join("✅" if v else "❌" for v in sig.filters_passed.values())
             ticker_col = sig.ticker.ljust(max_ticker_len)
             if sig.should_enter:
-                lines.append(f"📈 `{ticker_col}` — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
+                scan_lines.append(f"📈 `{ticker_col}` — BUY @ ${sig.entry_price:.2f} | stop ${sig.initial_stop:.2f}  {checks}")
             else:
-                lines.append(f"➖ `{ticker_col}`  {checks}")
-    elif not tickers:
-        lines.append("\n*Earnings Scan*: no tickers evaluated.")
-    else:
-        lines.append(f"\n*Earnings Scan* ({len(tickers)} tickers): no entries.")
-
-    notify("\n".join(lines))
+                scan_lines.append(f"➖ `{ticker_col}`  {checks}")
+        notify_thread(ts, "\n".join(scan_lines))
 
 
 
