@@ -283,6 +283,8 @@ def _filter_us_exchange(tickers: list[str]) -> list[str]:
     candidates = [t for t in tickers if _US_TICKER_RE.match(t)]
 
     def check(ticker: str) -> str | None:
+        import time
+        time.sleep(0.3)
         try:
             info = yf.Ticker(ticker).info
             exchange = info.get("exchange", "")
@@ -294,7 +296,7 @@ def _filter_us_exchange(tickers: list[str]) -> list[str]:
         return None
 
     results = []
-    with ThreadPoolExecutor(max_workers=20) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {pool.submit(check, t): t for t in candidates}
         for future in as_completed(futures):
             result = future.result()
