@@ -70,15 +70,18 @@ def run_scan_cycle(mode: str = "paper") -> None:
         entries_amc = get_earnings_calendar_details(yesterday)
         entries_bmo = get_earnings_calendar_details(today)
         all_entries = [e for e in entries_amc + entries_bmo if e.eps_estimate is not None]
+        entry_by_ticker = {e.ticker: e for e in all_entries}
         tickers = _filter_us_exchange([e.ticker for e in all_entries])
     except Exception as e:
         logger.error(f"Failed to fetch earnings calendar: {e}", exc_info=True)
         tickers = []
+        entry_by_ticker = {}
 
     signals = []
     for ticker in tickers:
         try:
-            surprise = get_earnings_surprise(ticker, date=today)
+            entry_date = entry_by_ticker[ticker].date if ticker in entry_by_ticker else today
+            surprise = get_earnings_surprise(ticker, date=entry_date)
             prior_runup = get_prior_runup(ticker)
             sector_move = get_sector_intraday_move(ticker, today)
             atr = get_atr(ticker)
