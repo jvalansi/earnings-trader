@@ -170,6 +170,85 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
 
 
+def run_monthly_pnl_summary() -> None:
+    """1st of each month, 9:30 AM ET — post last month's realized PnL summary to Slack."""
+    now = datetime.now(EASTERN)
+    # Last month's date range
+    first_of_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    last_month_end = first_of_this_month
+    last_month_start = (first_of_this_month - timedelta(days=1)).replace(day=1)
+    month_label = last_month_start.strftime("%B %Y")
+    logger.info(f"=== Monthly PnL Summary: {last_month_start.date()} to {last_month_end.date()} ===")
+
+    trades_path = Path(__file__).parent.parent / "data" / "trades_log.jsonl"
+    if not trades_path.exists():
+        notify(f"*Monthly PnL Summary — {month_label}*: no trades log found.")
+        return
+
+    buys: dict[str, list[dict]] = defaultdict(list)
+    closed_trades: list[dict] = []
+
+    with trades_path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not t.get("success"):
+                continue
+            ts = datetime.fromisoformat(t["timestamp"]).astimezone(EASTERN)
+            if t["action"] == "buy":
+                buys[t["ticker"]].append({"price": t["fill_price"], "qty": t["quantity"], "ts": ts})
+            elif t["action"] == "sell" and last_month_start <= ts < last_month_end:
+                ticker = t["ticker"]
+                buy = buys[ticker].pop(0) if buys[ticker] else None
+                closed_trades.append({
+                    "ticker": ticker,
+                    "buy_price": buy["price"] if buy else None,
+                    "sell_price": t["fill_price"],
+                    "qty": t["quantity"],
+                    "sell_ts": ts,
+                })
+
+    lines = [f"*Monthly PnL Summary — {month_label}*"]
+
+    if closed_trades:
+        total_pnl = 0.0
+        wins, losses = 0, 0
+        for ct in closed_trades:
+            if ct["buy_price"] is not None:
+                pnl = (ct["sell_price"] - ct["buy_price"]) * ct["qty"]
+                pnl_pct = (ct["sell_price"] - ct["buy_price"]) / ct["buy_price"] * 100
+                total_pnl += pnl
+                sign = "+" if pnl >= 0 else ""
+                icon = "✅" if pnl >= 0 else "❌"
+                if pnl >= 0:
+                    wins += 1
+                else:
+                    losses += 1
+                lines.append(
+                    f"{icon} *{ct['ticker']}* — {ct['qty']} shares | "
+                    f"${ct['buy_price']:.2f} → ${ct['sell_price']:.2f} "
+                    f"({sign}{pnl_pct:.1f}%) | {sign}${pnl:.2f}"
+                )
+            else:
+                lines.append(f"❓ *{ct['ticker']}* — sold @ ${ct['sell_price']:.2f} (no matching buy)")
+
+        total_sign = "+" if total_pnl >= 0 else ""
+        win_rate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
+        lines.append(
+            f"\n*Total: {total_sign}${total_pnl:.2f}* | "
+            f"{wins}W / {losses}L ({win_rate:.0f}% win rate)"
+        )
+    else:
+        lines.append("No closed trades last month.")
+
+    notify("\n".join(lines))
+
+
 def run_weekly_pnl_summary() -> None:
     """Monday 9:00 AM ET — post last week's realized PnL summary to Slack."""
     now = datetime.now(EASTERN)
@@ -335,8 +414,19 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         name="Weekly PnL Summary @ 9:30 AM ET Sunday",
         misfire_grace_time=300,
     )
+    scheduler.add_job(
+        run_monthly_pnl_summary,
+        trigger="cron",
+        day=1,
+        hour=9,
+        minute=30,
+        id="monthly_pnl_summary",
+        name="Monthly PnL Summary @ 9:30 AM ET on 1st",
+        misfire_grace_time=3600,
+    )
 
     logger.info(f"Scheduler starting in {mode!r} mode.")
-    logger.info("  Scan cycle:         9:30 AM ET (exit positions + scan entries)")
-    logger.info("  Weekly PnL summary: 9:30 AM ET Sunday (last week's realized PnL)")
+    logger.info("  Scan cycle:          9:30 AM ET Mon-Fri (exit positions + scan entries)")
+    logger.info("  Weekly PnL summary:  9:30 AM ET Sunday (last week's realized PnL)")
+    logger.info("  Monthly PnL summary: 9:30 AM ET 1st of month (last month's realized PnL)")
     scheduler.start()
