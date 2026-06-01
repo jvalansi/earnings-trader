@@ -23,6 +23,33 @@ logger = logging.getLogger(__name__)
 EASTERN = pytz.timezone("US/Eastern")
 
 
+def _get_spy_return_daily() -> float | None:
+    """SPY % return for the most recent completed trading day."""
+    try:
+        df = get_ohlcv("SPY", days=2)
+        if len(df) < 2:
+            return None
+        return (float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-2]) - 1) * 100
+    except Exception as e:
+        logger.warning(f"Could not fetch SPY daily return: {e}")
+        return None
+
+
+def _get_spy_return_period(start: datetime, end: datetime) -> float | None:
+    """SPY % return over trading days spanning [start, end]."""
+    import yfinance as yf
+    try:
+        start_str = (start - timedelta(days=5)).strftime("%Y-%m-%d")
+        end_str = (end + timedelta(days=2)).strftime("%Y-%m-%d")
+        df = yf.Ticker("SPY").history(start=start_str, end=end_str, interval="1d", auto_adjust=True)
+        if df.empty or len(df) < 2:
+            return None
+        return (float(df["Close"].iloc[-1]) / float(df["Close"].iloc[0]) - 1) * 100
+    except Exception as e:
+        logger.warning(f"Could not fetch SPY period return: {e}")
+        return None
+
+
 def run_scan_cycle(mode: str = "paper") -> None:
     """9:30 AM ET — exit/update open positions, then scan for new entries.
 
@@ -120,8 +147,25 @@ def run_scan_cycle(mode: str = "paper") -> None:
             for p in positions
             if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
         )
+        daily_portfolio_base = sum(
+            prev_prices[p.ticker] * p.quantity
+            for p in positions
+            if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
+        )
         daily_sign = "+" if daily_pnl_total >= 0 else ""
-        lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f}*")
+        if daily_portfolio_base > 0:
+            daily_pnl_pct = daily_pnl_total / daily_portfolio_base * 100
+            pnl_pct_sign = "+" if daily_pnl_pct >= 0 else ""
+            spy_daily = _get_spy_return_daily()
+            alpha_str = ""
+            if spy_daily is not None:
+                alpha = daily_pnl_pct - spy_daily
+                spy_sign = "+" if spy_daily >= 0 else ""
+                alpha_sign = "+" if alpha >= 0 else ""
+                alpha_str = f" | SPY: {spy_sign}{spy_daily:.2f}% | α: {alpha_sign}{alpha:.2f}%"
+            lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f} ({pnl_pct_sign}{daily_pnl_pct:.2f}%){alpha_str}*")
+        else:
+            lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f}*")
         lines.append("\n*Positions*")
         max_ticker_len = max(len(pos.ticker) for pos in positions)
         for pos in positions:
@@ -217,12 +261,14 @@ def run_monthly_pnl_summary() -> None:
 
     if closed_trades:
         total_pnl = 0.0
+        total_invested = 0.0
         wins, losses = 0, 0
         for ct in closed_trades:
             if ct["buy_price"] is not None:
                 pnl = (ct["sell_price"] - ct["buy_price"]) * ct["qty"]
                 pnl_pct = (ct["sell_price"] - ct["buy_price"]) / ct["buy_price"] * 100
                 total_pnl += pnl
+                total_invested += ct["buy_price"] * ct["qty"]
                 sign = "+" if pnl >= 0 else ""
                 icon = "✅" if pnl >= 0 else "❌"
                 if pnl >= 0:
@@ -239,9 +285,21 @@ def run_monthly_pnl_summary() -> None:
 
         total_sign = "+" if total_pnl >= 0 else ""
         win_rate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
+        pnl_pct_str = ""
+        spy_str = ""
+        if total_invested > 0:
+            portfolio_pct = total_pnl / total_invested * 100
+            pnl_pct_sign = "+" if portfolio_pct >= 0 else ""
+            pnl_pct_str = f" ({pnl_pct_sign}{portfolio_pct:.2f}%)"
+            spy_monthly = _get_spy_return_period(last_month_start, last_month_end)
+            if spy_monthly is not None:
+                alpha = portfolio_pct - spy_monthly
+                spy_sign = "+" if spy_monthly >= 0 else ""
+                alpha_sign = "+" if alpha >= 0 else ""
+                spy_str = f" | SPY: {spy_sign}{spy_monthly:.2f}% | α: {alpha_sign}{alpha:.2f}%"
         lines.append(
-            f"\n*Total: {total_sign}${total_pnl:.2f}* | "
-            f"{wins}W / {losses}L ({win_rate:.0f}% win rate)"
+            f"\n*Total: {total_sign}${total_pnl:.2f}{pnl_pct_str}* | "
+            f"{wins}W / {losses}L ({win_rate:.0f}% win rate){spy_str}"
         )
     else:
         lines.append("No closed trades last month.")
@@ -295,12 +353,14 @@ def run_weekly_pnl_summary() -> None:
 
     if closed_trades:
         total_pnl = 0.0
+        total_invested = 0.0
         wins, losses = 0, 0
         for ct in closed_trades:
             if ct["buy_price"] is not None:
                 pnl = (ct["sell_price"] - ct["buy_price"]) * ct["qty"]
                 pnl_pct = (ct["sell_price"] - ct["buy_price"]) / ct["buy_price"] * 100
                 total_pnl += pnl
+                total_invested += ct["buy_price"] * ct["qty"]
                 sign = "+" if pnl >= 0 else ""
                 icon = "✅" if pnl >= 0 else "❌"
                 if pnl >= 0:
@@ -317,9 +377,21 @@ def run_weekly_pnl_summary() -> None:
 
         total_sign = "+" if total_pnl >= 0 else ""
         win_rate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
+        pnl_pct_str = ""
+        spy_str = ""
+        if total_invested > 0:
+            portfolio_pct = total_pnl / total_invested * 100
+            pnl_pct_sign = "+" if portfolio_pct >= 0 else ""
+            pnl_pct_str = f" ({pnl_pct_sign}{portfolio_pct:.2f}%)"
+            spy_weekly = _get_spy_return_period(week_start, week_end)
+            if spy_weekly is not None:
+                alpha = portfolio_pct - spy_weekly
+                spy_sign = "+" if spy_weekly >= 0 else ""
+                alpha_sign = "+" if alpha >= 0 else ""
+                spy_str = f" | SPY: {spy_sign}{spy_weekly:.2f}% | α: {alpha_sign}{alpha:.2f}%"
         lines.append(
-            f"\n*Total: {total_sign}${total_pnl:.2f}* | "
-            f"{wins}W / {losses}L ({win_rate:.0f}% win rate)"
+            f"\n*Total: {total_sign}${total_pnl:.2f}{pnl_pct_str}* | "
+            f"{wins}W / {losses}L ({win_rate:.0f}% win rate){spy_str}"
         )
     else:
         lines.append("No closed trades this week.")
