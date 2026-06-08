@@ -8,8 +8,16 @@ Requires env vars: SLACK_BOT_TOKEN, SLACK_NOTIFY_CHANNEL
 """
 import os
 import logging
+import subprocess
 
 logger = logging.getLogger(__name__)
+
+
+def _cc_send(text: str) -> None:
+    try:
+        subprocess.run(["cc-connect", "send", "--message", text], timeout=10, check=False)
+    except Exception as e:
+        logger.warning(f"cc-connect send failed: {e}")
 
 _client = None
 
@@ -39,6 +47,7 @@ def notify(text: str) -> str | None:
         return None
     try:
         resp = client.chat_postMessage(channel=channel, text=text)
+        _cc_send(text)
         return resp["ts"]
     except Exception as e:
         logger.warning(f"Slack notification failed: {e}")
