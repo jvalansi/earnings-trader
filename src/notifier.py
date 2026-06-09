@@ -26,7 +26,11 @@ def _discord_send(text: str) -> None:
         req = urllib.request.Request(
             f"https://discord.com/api/v10/channels/{_DISCORD_CHANNEL}/messages",
             data=payload,
-            headers={"Authorization": f"Bot {token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordBot (https://github.com/jvalansi/earnings-trader, 1.0)",
+            },
             method="POST",
         )
         urllib.request.urlopen(req, timeout=10)
@@ -52,7 +56,8 @@ def _get_client():
 
 
 def notify(text: str) -> str | None:
-    """Post a message to the configured Slack channel. Returns the message ts, or None."""
+    """Post a message to Discord and/or Slack. Returns Slack message ts, or None."""
+    _discord_send(text)
     channel = os.environ.get("SLACK_NOTIFY_CHANNEL")
     if not channel:
         return None
@@ -61,7 +66,6 @@ def notify(text: str) -> str | None:
         return None
     try:
         resp = client.chat_postMessage(channel=channel, text=text)
-        _discord_send(text)
         return resp["ts"]
     except Exception as e:
         logger.warning(f"Slack notification failed: {e}")
@@ -69,7 +73,7 @@ def notify(text: str) -> str | None:
 
 
 def notify_thread(thread_ts: str, text: str) -> None:
-    """Reply to an existing message in a thread."""
+    """Reply to an existing message in a thread (Slack only)."""
     channel = os.environ.get("SLACK_NOTIFY_CHANNEL")
     if not channel or not thread_ts:
         return
