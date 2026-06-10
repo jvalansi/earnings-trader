@@ -141,31 +141,39 @@ def run_scan_cycle(mode: str = "paper") -> None:
     lines = [f"*Morning Update — {today}*"]
 
     action_map = {a.ticker: a for a in actions}
+
+    # Daily P&L on positions held at start of cycle (always shown)
+    daily_pnl_total = sum(
+        (current_prices[p.ticker] - prev_prices[p.ticker]) * p.quantity
+        for p in positions
+        if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
+    )
+    daily_portfolio_base = sum(
+        prev_prices[p.ticker] * p.quantity
+        for p in positions
+        if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
+    )
+    daily_sign = "+" if daily_pnl_total >= 0 else ""
+    spy_daily = _get_spy_return_daily()
+    spy_str = ""
+    if spy_daily is not None:
+        spy_sign = "+" if spy_daily >= 0 else ""
+        spy_str = f" | SPY: {spy_sign}{spy_daily:.2f}%"
+    if daily_portfolio_base > 0:
+        daily_pnl_pct = daily_pnl_total / daily_portfolio_base * 100
+        pnl_pct_sign = "+" if daily_pnl_pct >= 0 else ""
+        alpha_str = ""
+        if spy_daily is not None:
+            alpha = daily_pnl_pct - spy_daily
+            alpha_sign = "+" if alpha >= 0 else ""
+            alpha_str = f" | α: {alpha_sign}{alpha:.2f}%"
+        lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f} ({pnl_pct_sign}{daily_pnl_pct:.2f}%){spy_str}{alpha_str}*")
+    elif positions:
+        lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f}{spy_str}*")
+    else:
+        lines.append(f"\n*Daily P&L: $0.00 (no positions held overnight){spy_str}*")
+
     if positions:
-        daily_pnl_total = sum(
-            (current_prices[p.ticker] - prev_prices[p.ticker]) * p.quantity
-            for p in positions
-            if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
-        )
-        daily_portfolio_base = sum(
-            prev_prices[p.ticker] * p.quantity
-            for p in positions
-            if p.ticker in current_prices and p.ticker in prev_prices and p.quantity
-        )
-        daily_sign = "+" if daily_pnl_total >= 0 else ""
-        if daily_portfolio_base > 0:
-            daily_pnl_pct = daily_pnl_total / daily_portfolio_base * 100
-            pnl_pct_sign = "+" if daily_pnl_pct >= 0 else ""
-            spy_daily = _get_spy_return_daily()
-            alpha_str = ""
-            if spy_daily is not None:
-                alpha = daily_pnl_pct - spy_daily
-                spy_sign = "+" if spy_daily >= 0 else ""
-                alpha_sign = "+" if alpha >= 0 else ""
-                alpha_str = f" | SPY: {spy_sign}{spy_daily:.2f}% | α: {alpha_sign}{alpha:.2f}%"
-            lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f} ({pnl_pct_sign}{daily_pnl_pct:.2f}%){alpha_str}*")
-        else:
-            lines.append(f"\n*Daily P&L: {daily_sign}${daily_pnl_total:.2f}*")
         lines.append("\n*Positions*")
         max_ticker_len = max(len(pos.ticker) for pos in positions)
         for pos in positions:
@@ -303,6 +311,26 @@ def run_monthly_pnl_summary() -> None:
         )
     else:
         lines.append("No closed trades last month.")
+
+    # Open positions (unrealized)
+    positions = load_positions()
+    if positions:
+        lines.append("\n*Open Positions (unrealized)*")
+        for pos in positions:
+            try:
+                df = get_ohlcv(pos.ticker, days=1)
+                price = float(df["Close"].iloc[-1])
+                pnl = (price - pos.entry_price) * pos.quantity
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                sign = "+" if pnl >= 0 else ""
+                lines.append(
+                    f"  • *{pos.ticker}* — {pos.quantity} sh | "
+                    f"${pos.entry_price:.2f} → ${price:.2f} "
+                    f"({sign}{pnl_pct:.1f}%) | {sign}${pnl:.2f} | day {pos.day_count}/10"
+                )
+            except Exception as e:
+                logger.warning(f"Could not fetch price for {pos.ticker}: {e}")
+                lines.append(f"  • *{pos.ticker}* — price unavailable | day {pos.day_count}/10")
 
     notify("\n".join(lines))
 
@@ -501,4 +529,8 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
     logger.info("  Scan cycle:          9:30 AM ET Mon-Fri (exit positions + scan entries)")
     logger.info("  Weekly PnL summary:  9:30 AM ET Sunday (last week's realized PnL)")
     logger.info("  Monthly PnL summary: 9:30 AM ET 1st of month (last month's realized PnL)")
+    now = datetime.now(EASTERN)
+    for job in scheduler.get_jobs():
+        next_fire = job.trigger.get_next_fire_time(None, now)
+        logger.info(f"  Next run — {job.name}: {next_fire}")
     scheduler.start()
