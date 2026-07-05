@@ -6,25 +6,11 @@
 
 | Milestone | Description | Expected Monthly ROI |
 |---|---|---|
-| **Phase 2 complete** | Paper trading validated at Aug 31, 2026 checkpoint (see below) | — |
+| **Phase 2 complete** | Paper trading validated, win rate > 50%, positive expectancy | — |
 | **Phase 3: go live** | Deploy $5k capital via Alpaca/IBKR, real P&L | $200–500/mo |
 | **Scale capital** | Raise to $20k+ as strategy proves out | $800–2,000/mo |
 | **Multi-strategy** | Add BMO + sector rotation variants | 2–3× current returns |
 | **Automation** | Zero-touch daily operation, Slack alerts only | — |
-
-### Go/No-Go Checkpoint — 2026-08-31
-
-Decision is made on the **post-fix trade set only** (entries on or after 2026-04-02, when commit `2f38981` fixed the look-ahead entry bug). Pre-fix trades used a broken entry model documented in `docs/BACKTEST.md` and are excluded from the evaluation.
-
-Evaluate using the per-trade return series (log or simple returns of realized trades):
-
-- **GO** (deploy $5k Phase 3): `t-stat ≥ 2.0` AND `mean return ≥ +1.0%/trade` AND `n ≥ 60 post-fix trades`
-- **NO-GO / KILL**: `t-stat ≤ 1.0` OR `mean return ≤ 0%/trade` at n ≥ 60
-- **EXTEND** (continue paper trading, re-evaluate 2026-10-31): anything in between
-
-The win-rate > 50% target from the previous version of this table is replaced with expectancy + t-stat because the strategy's backtest edge is payoff-asymmetric (1.46× win/loss ratio) — a sub-50% win rate is consistent with a profitable strategy and should not by itself trigger a kill.
-
-Reference baseline (post-fix data as of 2026-07-02, n=43): win rate 44.2%, mean return +3.88%/trade, t-stat 1.71, P&L +$13,365.
 
 **Next step (Notion task):** Add P&L performance dashboard + returns tracking — better visibility → better parameter tuning → ~$500/mo improvement in returns.
 
