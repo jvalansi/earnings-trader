@@ -11,7 +11,7 @@ data/backtest_cache/ to avoid re-fetching across runs.
     get_ah_proxy(df, earnings_date)                 -> float
     get_historical_earnings_calendar(date)          -> list[dict]
     get_historical_surprise(ticker, date)           -> EarningsSurprise
-    get_exchange_cached(ticker)                     -> str
+    is_us_equity_cached(ticker)                     -> bool
     get_sector_etf_cached(ticker)                   -> str
     get_sector_move_on_date(etf, df, date)          -> float
 
@@ -90,16 +90,25 @@ def get_ohlcv_range(ticker: str, start: str, end: str) -> pd.DataFrame:
     fetch_start = (start_dt - timedelta(days=30)).strftime("%Y-%m-%d")
     fetch_end = (end_dt + timedelta(days=5)).strftime("%Y-%m-%d")
 
-    raw = yf.Ticker(ticker).history(
-        start=fetch_start, end=fetch_end, interval="1d", auto_adjust=True
+    # FMP is used instead of yfinance because yfinance aggressively rate-limits
+    # during backtest cache warm-up (thousands of tickers over a short window)
+    # and returns silent 429s.
+    url = (
+        f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
+        f"?from={fetch_start}&to={fetch_end}&apikey={FMP_API_KEY}"
     )
-    if raw.empty:
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    payload = resp.json()
+    bars = payload.get("historical", []) if isinstance(payload, dict) else []
+    if not bars:
         raise ValueError(f"No OHLCV data for {ticker}")
 
-    if raw.index.tzinfo is not None:
-        raw.index = raw.index.tz_localize(None)
+    df = pd.DataFrame(bars)[["date", "open", "high", "low", "close", "volume"]]
+    df.columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.set_index("Date").sort_index()
 
-    df = raw[["Open", "High", "Low", "Close", "Volume"]]
     with cache_path.open("wb") as f:
         pickle.dump(df, f)
 
@@ -277,20 +286,55 @@ def get_historical_surprise(ticker: str, date: str) -> EarningsSurprise:
 # Ticker metadata
 # ---------------------------------------------------------------------------
 
-def get_exchange_cached(ticker: str) -> str:
-    """Return yfinance exchange code for ticker, cached to disk."""
+# FMP short-name codes for major US equity exchanges. Loaded via
+# _load_stock_list() below and looked up by is_us_equity_cached().
+_US_EXCHANGE_SHORT_NAMES = frozenset({"NYSE", "NASDAQ", "AMEX"})
+_STOCK_LIST_CACHE: dict[str, dict] | None = None
+
+
+def _load_stock_list() -> dict[str, dict]:
+    """Load FMP's /api/v3/stock/list into a symbol→record map, cached to disk.
+
+    The endpoint returns ~90k records with symbol, exchangeShortName, and type
+    (stock / etf / fund / trust). Cached as one file — refreshed only when the
+    on-disk copy is deleted. That's fine for backtesting: new tickers listed
+    after the cache date won't appear as candidates, but the FMP earnings
+    calendar naturally lags for new listings too.
+    """
+    global _STOCK_LIST_CACHE
+    if _STOCK_LIST_CACHE is not None:
+        return _STOCK_LIST_CACHE
     _ensure_cache_dir()
-    cache_path = CACHE_DIR / f"exchange_{ticker}.json"
+    cache_path = CACHE_DIR / "stock_list.json"
     if cache_path.exists():
         with cache_path.open("r") as f:
-            return json.load(f).get("exchange", "")
-    try:
-        exchange = yf.Ticker(ticker).info.get("exchange", "")
-    except Exception:
-        exchange = ""
-    with cache_path.open("w") as f:
-        json.dump({"exchange": exchange}, f)
-    return exchange
+            records = json.load(f)
+    else:
+        url = f"https://financialmodelingprep.com/api/v3/stock/list?apikey={FMP_API_KEY}"
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        records = resp.json()
+        with cache_path.open("w") as f:
+            json.dump(records, f)
+    _STOCK_LIST_CACHE = {r["symbol"]: r for r in records if r.get("symbol")}
+    return _STOCK_LIST_CACHE
+
+
+def is_us_equity_cached(ticker: str) -> bool:
+    """True if ticker is a US common stock on NYSE, NASDAQ, or AMEX.
+
+    Uses FMP's bulk stock list (single API call, cached to disk) instead of
+    yfinance's per-ticker Ticker.info — which is aggressively rate-limited and
+    was returning empty strings for 97% of lookups, silently filtering out
+    nearly every backtest candidate.
+    """
+    rec = _load_stock_list().get(ticker)
+    if not rec:
+        return False
+    return (
+        rec.get("exchangeShortName") in _US_EXCHANGE_SHORT_NAMES
+        and rec.get("type") == "stock"
+    )
 
 
 def get_sector_etf_cached(ticker: str) -> str:

@@ -37,7 +37,7 @@ from backtest.data import (
     get_prior_runup_as_of,
     get_historical_earnings_calendar,
     get_historical_surprise,
-    get_exchange_cached,
+    is_us_equity_cached,
     get_sector_etf_cached,
     get_sector_move_on_date,
 )
@@ -83,7 +83,7 @@ def run_backtest(
         config_overrides: dict of config keys to override (for sweep).
             Supported keys: MIN_EPS_BEAT_PCT, MIN_AH_MOVE_PCT, MAX_PRIOR_RUNUP_PCT,
             SECTOR_ETF_MIN, ATR_STOP_MULTIPLIER, HOLD_DAYS, MAX_POSITIONS,
-            POSITION_SIZE_USD, ALLOWED_EXCHANGES.
+            POSITION_SIZE_USD.
 
     Returns:
         list[SimTrade] — one per completed trade (open positions at end_date
@@ -98,7 +98,6 @@ def run_backtest(
         "HOLD_DAYS":           config_overrides.get("HOLD_DAYS",           _cfg.HOLD_DAYS),
         "MAX_POSITIONS":       config_overrides.get("MAX_POSITIONS",       _cfg.MAX_POSITIONS),
         "POSITION_SIZE_USD":   config_overrides.get("POSITION_SIZE_USD",   _cfg.POSITION_SIZE_USD),
-        "ALLOWED_EXCHANGES":   config_overrides.get("ALLOWED_EXCHANGES",   _cfg.ALLOWED_EXCHANGES),
     }
 
     # Preload ETF OHLCV for all sector ETFs (avoids per-ticker inner-loop fetches)
@@ -180,28 +179,49 @@ def run_backtest(
                 continue
 
             try:
-                exchange = get_exchange_cached(ticker)
-                if exchange not in cfg["ALLOWED_EXCHANGES"]:
+                if not is_us_equity_cached(ticker):
                     continue
 
                 df = get_ohlcv_range(ticker, start_date, end_date)
-                atr = get_atr_as_of(df, date)
-                prior_runup = get_prior_runup_as_of(df, date)
 
-                # Entry price and AH signal: next-day open vs earnings-date close.
-                # Matches production (market order at 9:30 AM after overnight gap confirmed).
-                reg_close = get_close_on_date(df, date)
-                next_rows = df[df.index.strftime("%Y-%m-%d") > date]
-                if next_rows.empty:
-                    continue
-                entry_price = float(next_rows["Open"].iloc[0])
-                ah_move = (entry_price / reg_close) - 1.0
+                # Entry timing depends on announcement window:
+                #   BMO: earnings released pre-market on D → signal is
+                #        (D_open / prev_close - 1), entry at D_open.
+                #   AMC: earnings released post-close on D → signal is
+                #        (D+1_open / D_close - 1),  entry at D+1_open.
+                # Records without a 'time' field default to AMC — this matches the
+                # original single-model behavior and is the safer failure mode
+                # (delayed entry) rather than an incorrect same-day entry.
+                announce_time = (record.get("time") or "").lower()
+                if announce_time == "bmo":
+                    day_rows = df[df.index.strftime("%Y-%m-%d") == date]
+                    prev_rows = df[df.index.strftime("%Y-%m-%d") < date]
+                    if day_rows.empty or prev_rows.empty:
+                        continue
+                    prev_close = float(prev_rows["Close"].iloc[-1])
+                    entry_price = float(day_rows["Open"].iloc[0])
+                    ah_move = (entry_price / prev_close) - 1.0
+                    entry_date = date
+                    signal_asof = prev_rows.index[-1].strftime("%Y-%m-%d")
+                else:
+                    reg_close = get_close_on_date(df, date)
+                    next_rows = df[df.index.strftime("%Y-%m-%d") > date]
+                    if next_rows.empty:
+                        continue
+                    entry_price = float(next_rows["Open"].iloc[0])
+                    ah_move = (entry_price / reg_close) - 1.0
+                    entry_date = next_rows.index[0].strftime("%Y-%m-%d")
+                    signal_asof = date
+
+                # ATR, runup, sector move are pre-earnings snapshots.
+                atr = get_atr_as_of(df, signal_asof)
+                prior_runup = get_prior_runup_as_of(df, signal_asof)
 
                 etf = get_sector_etf_cached(ticker)
                 etf_df = etf_dfs.get(etf, etf_dfs.get(FALLBACK_ETF))
                 if etf_df is None:
                     continue
-                sector_move = get_sector_move_on_date(etf, etf_df, date)
+                sector_move = get_sector_move_on_date(etf, etf_df, signal_asof)
 
                 surprise = get_historical_surprise(ticker, date)
 
@@ -228,13 +248,13 @@ def run_backtest(
                 quantity = max(1, int(cfg["POSITION_SIZE_USD"] / entry_price))
                 positions.append(Position(
                     ticker=ticker,
-                    entry_date=date,
+                    entry_date=entry_date,
                     entry_price=entry_price,
                     current_stop=signal.initial_stop,
                     day_count=0,
                     quantity=quantity,
                 ))
-                logger.info(f"ENTER {ticker} on {date} @ {entry_price:.2f}")
+                logger.info(f"ENTER {ticker} on {entry_date} @ {entry_price:.2f} ({announce_time or 'amc'})")
 
             except Exception as e:
                 logger.debug(f"Skip {ticker} on {date}: {e}")
