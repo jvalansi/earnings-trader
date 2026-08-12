@@ -23,16 +23,50 @@ logger = logging.getLogger(__name__)
 EASTERN = pytz.timezone("US/Eastern")
 
 
-def _get_spy_return_daily() -> float | None:
-    """SPY % return for the most recent completed trading day."""
-    try:
-        df = get_ohlcv("SPY", days=2)
-        if len(df) < 2:
-            return None
-        return (float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-2]) - 1) * 100
-    except Exception as e:
-        logger.warning(f"Could not fetch SPY daily return: {e}")
+def _get_spy_closes_fmp(limit: int = 5) -> list[float] | None:
+    """Recent SPY daily closes (oldest→newest) from FMP, used as a yfinance fallback."""
+    import requests
+    from config import FMP_API_KEY
+
+    if not FMP_API_KEY:
         return None
+    try:
+        url = "https://financialmodelingprep.com/stable/historical-price-eod/light"
+        resp = requests.get(url, params={"symbol": "SPY", "apikey": FMP_API_KEY}, timeout=10)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not isinstance(rows, list) or len(rows) < 2:
+            return None
+        rows = sorted(rows, key=lambda r: r["date"])[-limit:]
+        return [float(r["price"]) for r in rows]
+    except Exception as e:
+        logger.warning(f"Could not fetch SPY closes from FMP: {e}")
+        return None
+
+
+def _get_spy_return_daily() -> float | None:
+    """SPY % return for the most recent completed trading day.
+
+    Tries yfinance with a couple of retries (transient 429s are common), then
+    falls back to FMP so the daily alpha line doesn't vanish on rate-limit days.
+    """
+    import time
+
+    for attempt in range(3):
+        try:
+            df = get_ohlcv("SPY", days=2)
+            if len(df) < 2:
+                break
+            return (float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-2]) - 1) * 100
+        except Exception as e:
+            logger.warning(f"Could not fetch SPY daily return (attempt {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+
+    closes = _get_spy_closes_fmp(limit=2)
+    if closes and len(closes) >= 2:
+        return (closes[-1] / closes[-2] - 1) * 100
+    return None
 
 
 def _get_spy_return_period(start: datetime, end: datetime) -> float | None:
