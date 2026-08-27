@@ -5,11 +5,14 @@ from pathlib import Path
 # Allow imports from src/ without PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-# Never let a test reach a broker or inherit an operator halt. Set before config is
-# imported so ALPACA_* from .env cannot leak into the test process — an earlier version
-# of this suite submitted real orders to the Alpaca paper account.
+# Never let a test reach a broker, a chat channel, or inherit an operator halt. Set
+# before config is imported, because config.load_dotenv() pulls .env into os.environ —
+# an earlier version of this suite submitted real orders to the Alpaca paper account,
+# and test_notifier posted "hello"/"test message" to the live #earnings-trader channel.
 os.environ["ALPACA_API_KEY"] = ""
 os.environ["ALPACA_SECRET_KEY"] = ""
+os.environ["DISCORD_BOT_TOKEN"] = ""
+os.environ["SLACK_BOT_TOKEN"] = ""
 os.environ["LIVE_TRADING_CONFIRMED"] = "no"
 os.environ["TRADING_HALTED"] = ""
 
