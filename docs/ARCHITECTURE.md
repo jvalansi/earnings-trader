@@ -17,6 +17,9 @@ graph TD
         state["state.py<br/>(positions.json)"]
         decision["decision.py"]
         execution["execution.py<br/>(trades_log.jsonl)"]
+        risk["risk.py<br/>(risk_state.json)"]
+        brokermod["broker.py<br/>(Alpaca preflight)"]
+        history["trade_history.py"]
     end
 
     notifier["notifier.py<br/>(Slack)"]
@@ -38,6 +41,12 @@ graph TD
 
     decision --> execution
     execution --> state
+    execution --> brokermod
+    risk --> execution
+    scheduler --> risk
+    scheduler --> brokermod
+    history --> risk
+    execution --> history
 ```
 
 ## Data Flow
@@ -60,14 +69,21 @@ earnings-trader/
 │   │   ├── prices.py       # yfinance: OHLCV, ATR, AH move, run-up
 │   │   ├── earnings.py     # FMP: EPS/rev surprise, guidance
 │   │   └── sector.py       # yfinance: sector ETF % change
+│   ├── analysis/
+│   │   └── track_record.py # performance stats + go/no-go verdict
 │   ├── config.py           # all thresholds and parameters
 │   ├── state.py            # JSON-backed position store
 │   ├── decision.py         # evaluate_entry() + evaluate_positions()
-│   ├── execution.py        # place_order() + update_state()
+│   ├── execution.py        # place_order() + execute_signals()
+│   ├── risk.py             # loss limit, drawdown breaker, kill switch
+│   ├── broker.py           # Alpaca preflight + position reconciliation
+│   ├── trade_history.py    # trade log -> closed round trips
 │   ├── scheduler.py        # APScheduler: daily cycles
-│   └── main.py             # entry point
+│   └── main.py             # CLI entry point
 ├── data/                   # runtime data (gitignored)
 │   ├── positions.json
+│   ├── risk_state.json
+│   ├── HALT                # present == entries blocked
 │   └── trades_log.jsonl
 ├── ROADMAP.md
 ├── ARCHITECTURE.md
@@ -88,9 +104,14 @@ MAX_PRIOR_RUNUP_PCT: float   # max allowed prior 10-day run-up (e.g. 0.10)
 SECTOR_ETF_MIN: float        # minimum sector ETF daily % change (e.g. -0.015)
 ATR_STOP_MULTIPLIER: float   # trailing stop distance in ATR multiples (e.g. 2.5)
 HOLD_DAYS: int               # maximum holding period in trading days (e.g. 10)
-MAX_POSITIONS: int           # maximum concurrent open positions (e.g. 5)
+MAX_POSITIONS: int           # maximum concurrent open positions (e.g. 10)
 LOOKBACK_DAYS: int           # days used for prior run-up calculation (e.g. 10)
-POSITION_SIZE_USD: float     # fixed dollar amount per trade
+ACCOUNT_CAPITAL_USD: float   # capital allocated to the strategy
+POSITION_SIZE_USD: float     # per-trade dollars (default: capital / MAX_POSITIONS)
+DAILY_LOSS_LIMIT_PCT: float  # daily equity loss that halts entries (e.g. 0.04)
+MAX_DRAWDOWN_PCT: float      # drawdown from peak equity that halts entries (e.g. 0.15)
+LIVE_TRADING_CONFIRMED: bool # required (with Alpaca keys) before live mode starts
+ORDER_FILL_TIMEOUT_SEC: float # how long place_order() polls for a fill
 ```
 
 Current values: see [`src/config.py`](src/config.py).
@@ -191,28 +212,82 @@ def evaluate_positions(positions, current_prices, current_atrs) -> list[Position
 ### `execution.py`
 
 ```python
+def resolve_mode(mode: str) -> Literal["live", "paper", "sim"]: ...
+def place_order(ticker, action, quantity, fill_price, mode="paper") -> OrderResult: ...
 def execute_signals(
     signals: list[EntrySignal],
     actions: list[PositionAction],
     current_prices: dict[str, float] | None = None,
-    mode: Literal["paper", "live"] = "paper",
+    mode: str = "paper",
+    risk_status: risk.RiskStatus | None = None,
 ) -> None: ...
 ```
 
-Logs all trades to `data/trades_log.jsonl`. Live mode raises `NotImplementedError`.
+Logs every order to `data/trades_log.jsonl` with the intended price, the actual fill and
+the resulting slippage. Orders are submitted to Alpaca and polled until they fill or
+`ORDER_FILL_TIMEOUT_SEC` expires; a position is only recorded once the fill is confirmed,
+and a failed exit keeps the position open so the next cycle retries it.
+
+Modes: `live` (real money — requires keys and `LIVE_TRADING_CONFIRMED`, never degrades
+silently), `paper` (Alpaca paper, or `sim` when no keys are set), `sim` (local only).
+
+Entries are skipped while `risk.py` reports a breach; exits and stop updates always run.
+
+---
+
+### `risk.py`
+
+```python
+def evaluate_risk(today=None, unrealized_pnl=0.0, persist=True) -> RiskStatus: ...
+def mark_to_market(positions, prices) -> float: ...
+def entries_allowed() -> bool: ...
+def halt(reason="") -> None: ...
+def resume() -> None: ...
+```
+
+Daily loss limit and drawdown breaker latch until `resume()`; the `data/HALT` kill switch
+is live while the file exists. Equity is measured from the risk epoch stored in
+`data/risk_state.json`, so P&L from an earlier capital base is excluded.
+
+---
+
+### `broker.py`
+
+```python
+def preflight(mode="paper") -> BrokerInfo: ...
+def broker_positions(mode="paper") -> dict[str, dict]: ...
+def reconcile(local_positions, mode="paper") -> dict: ...
+```
+
+Run at startup: confirms the account is reachable and tradable, and that
+`data/positions.json` matches the broker.
+
+---
+
+### `trade_history.py`
+
+```python
+def load_orders(path=None) -> list[dict]: ...
+def closed_trades(path=None) -> list[ClosedTrade]: ...
+def realized_pnl(trades, since=None, until=None) -> float: ...
+```
+
+FIFO-matches buys to sells. Single source of realized P&L for `risk.py` and
+`analysis/track_record.py`.
 
 ---
 
 ### `scheduler.py`
 
 ```python
-def run_bmo_scan_cycle(mode: str = "paper") -> None: ...   # 10:00 AM ET
-def run_scan_cycle(mode: str = "paper") -> None: ...       # 4:15 PM ET
-def run_update_cycle(mode: str = "paper") -> None: ...     # 4:30 PM ET
-def run_calendar_preview() -> None: ...                    # 7:00 PM ET
-def run_weekly_pnl_summary() -> None: ...                  # Mon 9:00 AM ET
+def run_scan_cycle(mode: str = "paper") -> None: ...       # 9:30 AM ET Mon-Fri
+def run_weekly_pnl_summary() -> None: ...                  # Sun 9:30 AM ET
+def run_monthly_pnl_summary() -> None: ...                 # 1st 9:30 AM ET
 def start(mode: Literal["paper", "live"] = "paper") -> None: ...
 ```
+
+`start()` runs the broker preflight and position reconciliation first, and refuses to
+start in live mode if either fails.
 
 ## Data Sources
 

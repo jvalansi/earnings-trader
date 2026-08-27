@@ -6,11 +6,35 @@
 
 | Milestone | Description | Expected Monthly ROI |
 |---|---|---|
-| **Phase 2 complete** | Paper trading validated, win rate > 50%, positive expectancy | — |
-| **Phase 3: go live** | Deploy $5k capital via Alpaca/IBKR, real P&L | $200–500/mo |
+| **Phase 2 complete** | Paper trading validated at the go/no-go checkpoint below | — |
+| **Phase 3: go live** | Deploy $5k capital via Alpaca, real P&L | $200–500/mo |
 | **Scale capital** | Raise to $20k+ as strategy proves out | $800–2,000/mo |
 | **Multi-strategy** | Add BMO + sector rotation variants | 2–3× current returns |
 | **Automation** | Zero-touch daily operation, Slack alerts only | — |
+
+### Go/No-Go Checkpoint
+
+Decided on the **post-fix trade set only** (entries on or after 2026-04-02, when commit
+`2f38981` fixed the look-ahead entry bug). Earlier trades used a broken entry model
+documented in `docs/BACKTEST.md`.
+
+Run `python src/main.py track-record` to evaluate. Criteria, on the per-trade return series:
+
+- **GO** (deploy $5k): `t-stat >= 2.0` **and** `mean return >= +1.0%/trade` **and** `n >= 60`
+- **NO-GO**: `t-stat <= 1.0` **or** `mean return <= 0` at `n >= 60`
+- **EXTEND** (keep paper trading): anything in between
+
+Win rate is not a criterion — the backtest edge is payoff-asymmetric (1.46x win/loss ratio),
+so a sub-50% win rate is consistent with a profitable strategy.
+
+| Evaluated | n | Win rate | Mean return | t-stat | P&L | Verdict |
+|---|---|---|---|---|---|---|
+| 2026-07-02 | 43 | 44.2% | +3.88% | 1.71 | +$13,365 | EXTEND |
+| 2026-08-27 | 88 | 50.0% | +0.90% | 0.65 | +$6,489 | **NO-GO** |
+
+The edge weakened as the sample grew: mean return fell from +3.88% to +0.90% and the
+t-stat from 1.71 to 0.65 while n doubled. Excluding the single best and worst trades, the
+mean is +0.38%/trade. Max drawdown ($9,059) is larger than cumulative P&L.
 
 **Next step (Notion task):** Add P&L performance dashboard + returns tracking — better visibility → better parameter tuning → ~$500/mo improvement in returns.
 
@@ -93,9 +117,22 @@ The backtester (Phase 1) will be built afterward using the same `data/` modules 
 
 ## Phase 3 — Live Trading
 
-> Status: **Not started** (after Phase 2 is validated)
+> Status: **Infrastructure ready, not deployed** — blocked on the go/no-go checkpoint above
 
-- [ ] `execution.py` — broker integration (Alpaca or IBKR)
-- [ ] Position sizing — fixed dollar, Kelly, or vol-adjusted
-- [ ] Alerting / monitoring — Slack or email notifications on entries/exits
-- [ ] Risk controls — daily loss limit, max drawdown circuit breaker
+- [x] `execution.py` — Alpaca integration with fill polling, real fill prices and slippage capture
+- [x] Position sizing — `ACCOUNT_CAPITAL_USD / MAX_POSITIONS`, default $5,000 / 10 = $500 per slot
+- [x] Alerting / monitoring — Slack + Discord notifications on entries, exits, failures and halts
+- [x] Risk controls — daily loss limit, max drawdown circuit breaker, manual kill switch (`risk.py`)
+- [x] Preflight — broker reachability and local/broker position reconciliation at startup (`broker.py`)
+- [x] Live-mode guard — requires Alpaca keys **and** `LIVE_TRADING_CONFIRMED=yes`; never simulates a live order
+- [ ] Measured slippage — no broker fill has been recorded yet; every fill in the log so far is assumed
+- [ ] Statistical edge — checkpoint currently reads NO-GO
+
+### Before deploying capital
+
+1. Run against Alpaca paper (`ALPACA_*` keys set) long enough to record real fills, then
+   compare `track-record` slippage against the assumed 9:30 open fill.
+2. Flatten the simulated book — `data/positions.json` holds positions sized for an $80k
+   book; the risk epoch excludes them, but they should not be inherited into live trading.
+3. At $5k capital a $500 slot buys 2 shares of a $240 stock. Position granularity is coarse;
+   either accept the rounding error or raise capital before going live.

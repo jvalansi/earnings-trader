@@ -1,4 +1,5 @@
 import pytest
+from config import ATR_STOP_MULTIPLIER, MAX_POSITIONS
 from decision import evaluate_entry, evaluate_positions
 from data.earnings import EarningsSurprise
 from state import Position
@@ -27,7 +28,7 @@ def test_evaluate_entry_all_filters_pass():
     )
     assert sig.should_enter is True
     assert sig.entry_price == 100.0
-    assert sig.initial_stop == pytest.approx(100.0 - 1.5 * 2.0)
+    assert sig.initial_stop == pytest.approx(100.0 - ATR_STOP_MULTIPLIER * 2.0)
     assert all(sig.filters_passed.values())
 
 
@@ -60,7 +61,7 @@ def test_evaluate_entry_fails_prior_runup():
 
 
 def test_evaluate_entry_fails_capacity():
-    full = [_position(ticker=f"T{i}") for i in range(5)]  # MAX_POSITIONS = 5
+    full = [_position(ticker=f"T{i}") for i in range(MAX_POSITIONS)]
     sig = evaluate_entry(
         ticker="AAPL", surprise=_surprise(), ah_move=0.05, prior_runup=0.03,
         sector_move=0.01, atr=2.0, current_price=100.0, open_positions=full,
@@ -95,15 +96,15 @@ def test_evaluate_positions_max_days_reached():
 
 def test_evaluate_positions_update_stop():
     pos = _position(current_stop=95.0, day_count=3)
-    # new_stop = 110 - 1.5*2 = 107.0 > 95.0 → raise stop
+    # new_stop = 110 - ATR_STOP_MULTIPLIER*2 > 95.0 → raise stop
     actions = evaluate_positions([pos], current_prices={"AAPL": 110.0}, current_atrs={"AAPL": 2.0})
     assert actions[0].action == "update_stop"
-    assert actions[0].new_stop == pytest.approx(107.0)
+    assert actions[0].new_stop == pytest.approx(110.0 - ATR_STOP_MULTIPLIER * 2.0)
 
 
 def test_evaluate_positions_hold_when_stop_would_lower():
     pos = _position(current_stop=95.0, day_count=3)
-    # new_stop = 96 - 1.5*2 = 93.0 < 95.0 → don't lower, hold
+    # new_stop = 96 - ATR_STOP_MULTIPLIER*2 < 95.0 → don't lower, hold
     actions = evaluate_positions([pos], current_prices={"AAPL": 96.0}, current_atrs={"AAPL": 2.0})
     assert actions[0].action == "hold"
 

@@ -36,7 +36,32 @@ A BUY signal requires **all** of the following:
 
 - **Stop loss:** Trailing stop at `entry_price - (2.5 × ATR)`, updated daily
 - **Exit:** Stop hit or 10 trading days, whichever comes first
-- **Max positions:** 5 concurrent
+- **Max positions:** 10 concurrent
+- **Position size:** `ACCOUNT_CAPITAL_USD / MAX_POSITIONS` (default $5,000 / 10 = $500)
+
+## Risk Controls
+
+New entries are blocked — exits always continue — when any of these trips:
+
+| Control | Default | Behavior |
+|---|---|---|
+| Daily loss limit | -4% of equity | Latches; clear with `main.py resume` |
+| Drawdown breaker | -15% from peak equity | Latches; clear with `main.py resume` |
+| Kill switch | `data/HALT` or `TRADING_HALTED=1` | Active while present |
+
+Equity is measured from the risk epoch recorded in `data/risk_state.json`, so P&L from an
+earlier capital base neither masks nor fakes a drawdown.
+
+## Execution Modes
+
+| Mode | Behavior |
+|---|---|
+| `sim` | No broker. Fills are assumed at the signal price — slippage is not measured. |
+| `paper` | Alpaca paper endpoint. Used automatically when `ALPACA_*` keys are set. |
+| `live` | Real money. Requires Alpaca keys **and** `LIVE_TRADING_CONFIRMED=yes`. A live order that cannot reach the broker fails loudly rather than being simulated. |
+
+Startup runs a preflight: broker reachability, account status, and a reconciliation of
+`data/positions.json` against the broker's positions.
 
 ## Daily Schedule
 
@@ -55,8 +80,18 @@ A BUY signal requires **all** of the following:
 git clone https://github.com/jvalansi/earnings-trader.git
 cd earnings-trader
 pip install -r requirements.txt
-cp .env.example .env        # add your FMP_API_KEY
+cp .env.example .env        # add your FMP_API_KEY (and ALPACA_* keys to trade)
 PYTHONPATH=src python src/main.py
+```
+
+## CLI
+
+```bash
+PYTHONPATH=src python src/main.py                  # start the scheduler
+PYTHONPATH=src python src/main.py preflight        # broker, risk state, position drift
+PYTHONPATH=src python src/main.py track-record     # performance stats + go/no-go verdict
+PYTHONPATH=src python src/main.py halt "reason"    # block new entries (exits keep running)
+PYTHONPATH=src python src/main.py resume           # clear halt / latched risk breach
 ```
 
 ---

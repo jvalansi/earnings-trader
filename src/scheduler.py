@@ -18,6 +18,8 @@ from data.sector import get_sector_intraday_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
 from state import load_positions, save_positions
+import broker
+import risk
 
 logger = logging.getLogger(__name__)
 EASTERN = pytz.timezone("US/Eastern")
@@ -89,11 +91,12 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     1. Increment day_count, evaluate exits and trailing stop updates for open positions
     2. Execute SELLs for positions that hit stop or max hold days
-    3. Fetch yesterday's (AMC) and today's (BMO) earnings calendar
-    4. For each ticker: fetch surprise, overnight gap, prior run-up, sector move, ATR
-    5. Evaluate entry signal against all filters
-    6. Execute BUY orders for passing signals
-    7. Post a single combined Slack notification
+    3. Evaluate risk controls — a breach blocks new entries (exits above always run)
+    4. Fetch yesterday's (AMC) and today's (BMO) earnings calendar
+    5. For each ticker: fetch surprise, overnight gap, prior run-up, sector move, ATR
+    6. Evaluate entry signal against all filters
+    7. Execute BUY orders for passing signals
+    8. Post a single combined Slack notification
     """
     eastern_now = datetime.now(EASTERN)
     today = eastern_now.strftime("%Y-%m-%d")
@@ -125,6 +128,13 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     # Reload after exits so entry evaluation sees accurate open position count
     open_positions = load_positions()
+
+    # --- Risk controls ---
+    risk_status = risk.evaluate_risk(
+        unrealized_pnl=risk.mark_to_market(open_positions, current_prices)
+    )
+    if not risk_status.entries_allowed:
+        logger.error(f"Risk controls tripped: {'; '.join(risk_status.reasons)}")
 
     # --- Scan for new entries ---
     try:
@@ -169,10 +179,10 @@ def run_scan_cycle(mode: str = "paper") -> None:
             continue
 
     if signals:
-        execute_signals(signals, [], mode=mode)
+        execute_signals(signals, [], mode=mode, risk_status=risk_status)
 
     # --- Combined notification ---
-    lines = [f"*Morning Update — {today}*"]
+    lines = [f"*Morning Update — {today}*", risk.status_line(risk_status)]
 
     action_map = {a.ticker: a for a in actions}
 
@@ -526,6 +536,21 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    info = broker.preflight(mode)
+    logger.info(broker.summary_line(info))
+    if mode == "live" and (info.blocked or info.mode != "live"):
+        raise RuntimeError(f"Refusing to start in live mode: {info.reason or 'broker preflight failed'}")
+    if info.mode == "sim":
+        logger.warning("Orders will NOT reach a broker — running in local simulation.")
+
+    drift = broker.reconcile(load_positions(), mode) if info.mode != "sim" else None
+    if drift and any(drift.values()):
+        logger.warning(f"Local positions do not match broker: {drift}")
+        notify(f"⚠️ *Position mismatch at startup* — local vs broker: {drift}")
+
+    if not risk.entries_allowed():
+        logger.warning("Risk controls are tripped — entries are blocked until `main.py resume`")
+
     scheduler = BlockingScheduler(timezone=EASTERN)
     scheduler.add_job(
         run_scan_cycle,
@@ -559,7 +584,7 @@ def start(mode: Literal["paper", "live"] = "paper") -> None:
         misfire_grace_time=3600,
     )
 
-    logger.info(f"Scheduler starting in {mode!r} mode.")
+    logger.info(f"Scheduler starting in {mode!r} mode (execution: {info.mode}).")
     logger.info("  Scan cycle:          9:30 AM ET Mon-Fri (exit positions + scan entries)")
     logger.info("  Weekly PnL summary:  9:30 AM ET Sunday (last week's realized PnL)")
     logger.info("  Monthly PnL summary: 9:30 AM ET 1st of month (last month's realized PnL)")

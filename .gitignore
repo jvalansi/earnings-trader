@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+src/data/backtest_results/

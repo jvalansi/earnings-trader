@@ -56,16 +56,14 @@ def test_get_earnings_surprise_guidance_weak():
 CALENDAR_RECORDS = [
     {"symbol": "AAPL", "time": "amc"},
     {"symbol": "MSFT", "time": "bmo"},
-    {"symbol": "GOOG", "time": ""},    # unknown timing → treated as amc
+    {"symbol": "GOOG", "time": ""},    # unknown timing → excluded from both windows
 ]
 
 
 def test_get_earnings_calendar_amc_default():
     with patch("data.earnings.requests.get", return_value=_mock_response(CALENDAR_RECORDS)):
         tickers = get_earnings_calendar("2026-01-15")
-    assert "AAPL" in tickers
-    assert "GOOG" in tickers
-    assert "MSFT" not in tickers
+    assert tickers == ["AAPL"]
 
 
 def test_get_earnings_calendar_bmo():

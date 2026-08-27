@@ -1,19 +1,41 @@
 """
-Order placement and trade logging. Routes to Alpaca paper/live or local simulation.
+Order placement and trade logging. Routes to Alpaca (live/paper) or local simulation.
 
-    OrderResult                                                  dataclass: ticker, action, quantity, fill_price, timestamp, mode, success, error
+    OrderResult                                                  dataclass: ticker, action, quantity,
+                                                                 fill_price, intended_price, slippage_pct,
+                                                                 timestamp, mode, status, order_id, success, error
 
+    resolve_mode(mode) -> ('live'|'paper'|'sim')                 what will actually happen, given credentials
     place_order(ticker, action, quantity, fill_price, mode='paper') -> OrderResult
-    execute_signals(signals, actions, current_prices=None, mode='paper') -> None
+    execute_signals(signals, actions, current_prices=None, mode='paper', risk_status=None) -> None
+
+Modes:
+    live   real money via Alpaca. Requires ALPACA_* keys and LIVE_TRADING_CONFIRMED=yes.
+           Never silently degrades — a live order that cannot reach the broker raises.
+    paper  Alpaca paper endpoint when keys are set, otherwise falls back to 'sim'.
+    sim    local simulation: fills assumed at the intended price, no broker involved.
+
+Exits are placed in the mode recorded on the position, not the mode of the current run.
+
+Entries are blocked when risk.py reports a breach; exits are always executed.
 """
 import json
 import logging
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from config import POSITION_SIZE_USD, TRADES_LOG_FILE, ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
+import risk
+from config import (
+    POSITION_SIZE_USD,
+    TRADES_LOG_FILE,
+    ALPACA_API_KEY,
+    ALPACA_SECRET_KEY,
+    LIVE_TRADING_CONFIRMED,
+    ORDER_FILL_TIMEOUT_SEC,
+)
 from notifier import notify
 from decision import EntrySignal, PositionAction
 from state import Position, add_position, remove_position, update_stop
@@ -22,17 +44,25 @@ logger = logging.getLogger(__name__)
 
 _log_path = Path(TRADES_LOG_FILE)
 
+Mode = Literal["live", "paper", "sim"]
+
+_TERMINAL_STATUSES = {"filled", "canceled", "expired", "rejected", "done_for_day"}
+
 
 @dataclass
 class OrderResult:
     ticker: str
     action: Literal["buy", "sell"]
     quantity: int
-    fill_price: float
-    timestamp: str          # ISO 8601 UTC
-    mode: Literal["paper", "live"]
+    fill_price: float           # actual fill (broker) or assumed fill (sim)
+    timestamp: str              # ISO 8601 UTC
+    mode: Mode
     success: bool
     error: str | None
+    intended_price: float = 0.0     # price the signal was generated at
+    slippage_pct: float | None = None  # positive == worse than intended
+    status: str | None = None       # broker order status
+    order_id: str | None = None
 
 
 def _append_trade_log(result: OrderResult) -> None:
@@ -41,38 +71,78 @@ def _append_trade_log(result: OrderResult) -> None:
         f.write(json.dumps(asdict(result)) + "\n")
 
 
+def _slippage(action: str, intended: float, fill: float) -> float | None:
+    """Signed slippage as a fraction of the intended price. Positive == paid up / sold down."""
+    if not intended:
+        return None
+    raw = (fill - intended) / intended
+    return raw if action == "buy" else -raw
+
+
+def resolve_mode(mode: str) -> Mode:
+    """Map the requested mode to what will actually execute, given available credentials."""
+    if mode == "sim":
+        return "sim"
+    if mode == "live":
+        if not (ALPACA_API_KEY and ALPACA_SECRET_KEY):
+            raise RuntimeError("live mode requested but ALPACA_API_KEY/ALPACA_SECRET_KEY are not set")
+        if not LIVE_TRADING_CONFIRMED:
+            raise RuntimeError("live mode requested but LIVE_TRADING_CONFIRMED is not set to 'yes'")
+        return "live"
+    if ALPACA_API_KEY and ALPACA_SECRET_KEY:
+        return "paper"
+    return "sim"
+
+
 def _place_alpaca_order(
     ticker: str,
     action: Literal["buy", "sell"],
     quantity: int,
-    fill_price: float,
-    mode: Literal["paper", "live"],
+    intended_price: float,
+    mode: Literal["live", "paper"],
 ) -> OrderResult:
-    """Submit a market order to Alpaca and wait for fill."""
+    """Submit a market order to Alpaca and poll until it fills or the timeout expires."""
     from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
 
-    paper = (mode == "paper")
-    client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=paper)
-
+    client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=(mode == "paper"))
     side = OrderSide.BUY if action == "buy" else OrderSide.SELL
     req = MarketOrderRequest(symbol=ticker, qty=quantity, side=side, time_in_force=TimeInForce.DAY)
 
     ts = datetime.now(timezone.utc).isoformat()
     try:
         order = client.submit_order(req)
-        # Use submitted fill_price as estimate; Alpaca fills may differ slightly
-        actual_fill = float(order.filled_avg_price) if order.filled_avg_price else fill_price
+        deadline = time.monotonic() + ORDER_FILL_TIMEOUT_SEC
+        while order.status.value not in _TERMINAL_STATUSES and time.monotonic() < deadline:
+            time.sleep(1)
+            order = client.get_order_by_id(order.id)
+
+        status = order.status.value
+        filled_qty = int(float(order.filled_qty or 0))
+        fill_price = float(order.filled_avg_price) if order.filled_avg_price else intended_price
+        filled = status == "filled" or filled_qty > 0
+
         result = OrderResult(
-            ticker=ticker, action=action, quantity=quantity, fill_price=actual_fill,
-            timestamp=ts, mode=mode, success=True, error=None,
+            ticker=ticker, action=action, quantity=filled_qty or quantity,
+            fill_price=fill_price, timestamp=ts, mode=mode,
+            success=filled, error=None if filled else f"order not filled (status={status})",
+            intended_price=intended_price,
+            slippage_pct=_slippage(action, intended_price, fill_price) if filled else None,
+            status=status, order_id=str(order.id),
         )
-        logger.info(f"[ALPACA {mode.upper()}] {action.upper()} {quantity} {ticker} @ {actual_fill:.2f} (order_id={order.id})")
+        slip = f"{result.slippage_pct:+.2%}" if result.slippage_pct is not None else "n/a"
+        logger.info(
+            f"[ALPACA {mode.upper()}] {action.upper()} {result.quantity} {ticker} @ {fill_price:.2f} "
+            f"(intended {intended_price:.2f}, slippage {slip}, status={status}, id={order.id})"
+        )
+        if not filled:
+            logger.error(f"[ALPACA {mode.upper()}] {ticker} did not fill within {ORDER_FILL_TIMEOUT_SEC}s: {status}")
     except Exception as e:
         result = OrderResult(
-            ticker=ticker, action=action, quantity=quantity, fill_price=fill_price,
+            ticker=ticker, action=action, quantity=quantity, fill_price=intended_price,
             timestamp=ts, mode=mode, success=False, error=str(e),
+            intended_price=intended_price, status="error",
         )
         logger.error(f"[ALPACA {mode.upper()}] Order failed for {ticker}: {e}")
 
@@ -85,20 +155,21 @@ def place_order(
     action: Literal["buy", "sell"],
     quantity: int,
     fill_price: float,
-    mode: Literal["paper", "live"] = "paper",
+    mode: str = "paper",
 ) -> OrderResult:
-    """Place a buy or sell order via Alpaca (paper or live) if credentials are configured,
-    otherwise fall back to local simulation."""
-    if ALPACA_API_KEY:
-        return _place_alpaca_order(ticker, action, quantity, fill_price, mode)
+    """Place a buy or sell order. `fill_price` is the intended (signal) price."""
+    effective = resolve_mode(mode)
 
-    # Local simulation fallback
+    if effective in ("live", "paper"):
+        return _place_alpaca_order(ticker, action, quantity, fill_price, effective)
+
     ts = datetime.now(timezone.utc).isoformat()
     result = OrderResult(
         ticker=ticker, action=action, quantity=quantity, fill_price=fill_price,
-        timestamp=ts, mode="paper", success=True, error=None,
+        timestamp=ts, mode="sim", success=True, error=None,
+        intended_price=fill_price, slippage_pct=0.0, status="sim_filled",
     )
-    logger.info(f"[PAPER SIM] {action.upper()} {quantity} shares of {ticker} @ {fill_price:.2f}")
+    logger.info(f"[SIM] {action.upper()} {quantity} shares of {ticker} @ {fill_price:.2f}")
     _append_trade_log(result)
     return result
 
@@ -107,38 +178,60 @@ def execute_signals(
     signals: list[EntrySignal],
     actions: list[PositionAction],
     current_prices: dict[str, float] | None = None,
-    mode: Literal["paper", "live"] = "paper",
+    mode: str = "paper",
+    risk_status: risk.RiskStatus | None = None,
 ) -> None:
     """Process a batch of entry signals and position actions.
 
-    Places orders and updates state for each.
-    current_prices is required for sell orders (to log the fill price).
+    Places orders and updates state for each. current_prices is required for sell
+    orders (to log the fill price). Entries are skipped while risk controls are
+    tripped; exits and stop updates always run.
     """
     # --- BUY: process entry signals ---
-    for sig in signals:
-        if not sig.should_enter:
-            logger.debug(f"Skipping {sig.ticker}: {sig.filters_passed}")
-            continue
+    wanted = [s for s in signals if s.should_enter]
+    if wanted:
+        allowed = risk_status.entries_allowed if risk_status else risk.entries_allowed()
+        if not allowed:
+            reasons = "; ".join(risk_status.reasons) if risk_status else "risk controls tripped"
+            tickers = ", ".join(s.ticker for s in wanted)
+            logger.error(f"Entries blocked by risk controls ({reasons}); skipped: {tickers}")
+            notify(f"🛑 *Entries blocked* — {reasons}\nSkipped: {tickers}")
+            wanted = []
 
+    for sig in wanted:
         price = sig.entry_price
         quantity = max(1, int(POSITION_SIZE_USD / price))
+        notional = quantity * price
+        if notional > POSITION_SIZE_USD * 1.5:
+            logger.warning(
+                f"{sig.ticker} @ ${price:.2f}: 1 share is ${notional:.0f} vs "
+                f"${POSITION_SIZE_USD:.0f} target slot — position is oversized"
+            )
 
-        place_order(sig.ticker, "buy", quantity, fill_price=price, mode=mode)
+        result = place_order(sig.ticker, "buy", quantity, fill_price=price, mode=mode)
+        if not result.success:
+            logger.error(f"Buy failed for {sig.ticker}, no position opened: {result.error}")
+            notify(f"⚠️ *BUY FAILED {sig.ticker}* — {result.error}")
+            continue
 
         new_pos = Position(
             ticker=sig.ticker,
-            entry_price=price,
+            entry_price=result.fill_price,
             current_stop=sig.initial_stop,
             entry_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             day_count=0,
-            quantity=quantity,
+            quantity=result.quantity,
+            mode=result.mode,
         )
         add_position(new_pos)
         logger.info(
-            f"Opened position: {sig.ticker} @ {price:.2f}, "
-            f"stop={sig.initial_stop:.2f}, qty={quantity}"
+            f"Opened position: {sig.ticker} @ {result.fill_price:.2f}, "
+            f"stop={sig.initial_stop:.2f}, qty={result.quantity}"
         )
-        notify(f"📈 *BUY {sig.ticker}* — {quantity} shares @ ${price:.2f} | stop ${sig.initial_stop:.2f}")
+        notify(
+            f"📈 *BUY {sig.ticker}* — {result.quantity} shares @ ${result.fill_price:.2f} "
+            f"| stop ${sig.initial_stop:.2f}"
+        )
 
     # --- SELL / UPDATE_STOP: process position actions ---
     prices = current_prices or {}
@@ -151,11 +244,23 @@ def execute_signals(
             open_positions = load_positions()
             pos = next((p for p in open_positions if p.ticker == act.ticker), None)
             qty = pos.quantity if pos else 0
+            # Exit where the entry happened: a position opened in simulation is not
+            # sold into a broker account that never held it.
+            exit_mode = pos.mode if pos else mode
 
-            place_order(act.ticker, "sell", qty, fill_price=fill_price, mode=mode)
+            result = place_order(act.ticker, "sell", qty, fill_price=fill_price, mode=exit_mode)
+            if not result.success:
+                # Keep the position in state so the next cycle retries the exit.
+                logger.error(f"Sell failed for {act.ticker}, position kept open: {result.error}")
+                notify(f"⚠️ *SELL FAILED {act.ticker}* — {result.error} (position kept open)")
+                continue
+
             remove_position(act.ticker)
-            logger.info(f"Closed position: {act.ticker} @ {fill_price:.2f}, reason={act.reason}")
-            notify(f"📉 *SELL {act.ticker}* — {qty} shares @ ${fill_price:.2f} | reason: {act.reason}")
+            logger.info(f"Closed position: {act.ticker} @ {result.fill_price:.2f}, reason={act.reason}")
+            notify(
+                f"📉 *SELL {act.ticker}* — {result.quantity} shares @ ${result.fill_price:.2f} "
+                f"| reason: {act.reason}"
+            )
 
         elif act.action == "update_stop":
             update_stop(act.ticker, act.new_stop)

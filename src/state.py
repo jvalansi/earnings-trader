@@ -1,7 +1,7 @@
 """
 JSON-backed position store. Reads/writes data/positions.json.
 
-    Position                        dataclass: ticker, entry_price, current_stop, entry_date, day_count, quantity
+    Position                        dataclass: ticker, entry_price, current_stop, entry_date, day_count, quantity, mode
 
     load_positions()                -> list[Position]
     save_positions(positions)       -> None
@@ -29,6 +29,9 @@ class Position:
     entry_date: str   # 'YYYY-MM-DD'
     day_count: int    # trading days held so far
     quantity: int = 0 # shares held (set at buy time)
+    mode: str = "sim" # venue the entry executed in: 'sim' | 'paper' | 'live'.
+                      # Exits are routed back to the same venue, so a simulated
+                      # position is never sold into a broker that does not hold it.
 
 
 def _ensure_data_dir() -> None:
