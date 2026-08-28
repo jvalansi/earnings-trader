@@ -37,7 +37,9 @@ A BUY signal requires **all** of the following:
 - **Stop loss:** Trailing stop at `entry_price - (2.5 × ATR)`, updated daily
 - **Exit:** Stop hit or 10 trading days, whichever comes first
 - **Max positions:** 10 concurrent
-- **Position size:** `ACCOUNT_CAPITAL_USD / MAX_POSITIONS` (default $5,000 / 10 = $500)
+- **Position size:** `ACCOUNT_CAPITAL_USD / MAX_POSITIONS` (default $5,000 / 10 = $500), sent
+  as a notional order where the broker supports fractional shares, so an $1,800 stock still
+  takes a $500 slot rather than one oversized share
 
 ## Risk Controls
 

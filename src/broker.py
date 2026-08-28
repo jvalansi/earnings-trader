@@ -5,6 +5,7 @@ Broker connectivity preflight and position reconciliation (Alpaca).
                                               buying_power, open_positions, blocked, reason
     preflight(mode)                -> BrokerInfo   verify credentials/account before trading
     broker_positions()             -> dict[str, dict]  ticker -> {qty, avg_entry_price}
+    is_fractionable(ticker, mode)  -> bool         can this symbol be bought by dollar amount?
     reconcile(local_positions)     -> dict         {'only_local': [...], 'only_broker': [...], 'qty_mismatch': [...]}
 """
 import logging
@@ -73,6 +74,34 @@ def preflight(mode: str = "paper") -> BrokerInfo:
         blocked=blocked,
         reason="account is blocked from trading" if blocked else None,
     )
+
+
+_fractionable_cache: dict[str, bool] = {}
+
+
+def is_fractionable(ticker: str, mode: str = "paper") -> bool:
+    """Whether Alpaca accepts notional (dollar-denominated) orders for this symbol.
+
+    False without a broker: local simulation has no asset database to consult.
+    """
+    from execution import resolve_mode
+
+    if ticker in _fractionable_cache:
+        return _fractionable_cache[ticker]
+    try:
+        effective = resolve_mode(mode)
+    except RuntimeError:
+        return False
+    if effective == "sim":
+        return False
+    try:
+        asset = _client(paper=(effective == "paper")).get_asset(ticker)
+        result = bool(asset.fractionable and asset.tradable)
+    except Exception as e:
+        logger.warning(f"Could not check fractionability for {ticker}: {e}")
+        result = False
+    _fractionable_cache[ticker] = result
+    return result
 
 
 def broker_positions(mode: str = "paper") -> dict[str, dict]:

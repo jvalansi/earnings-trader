@@ -171,9 +171,14 @@ def mark_to_market(positions, prices: dict[str, float]) -> float:
     """Unrealized P&L of positions opened at or after the risk epoch.
 
     Positions carried over from an earlier capital base are excluded: their P&L is
-    measured against a position size the current capital never funded.
+    measured against a position size the current capital never funded. Before the epoch
+    exists nothing qualifies — every open position predates the capital base about to be
+    established, so the answer is zero rather than "all of them".
     """
-    epoch_date = (epoch_ts() or "")[:10]
+    epoch = epoch_ts()
+    if epoch is None:
+        return 0.0
+    epoch_date = epoch[:10]
     return sum(
         (prices[p.ticker] - p.entry_price) * p.quantity
         for p in positions

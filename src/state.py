@@ -28,7 +28,7 @@ class Position:
     current_stop: float
     entry_date: str   # 'YYYY-MM-DD'
     day_count: int    # trading days held so far
-    quantity: int = 0 # shares held (set at buy time)
+    quantity: float = 0.0  # shares held (set at buy time; fractional where supported)
     mode: str = "sim" # venue the entry executed in: 'sim' | 'paper' | 'live'.
                       # Exits are routed back to the same venue, so a simulated
                       # position is never sold into a broker that does not hold it.

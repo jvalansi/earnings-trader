@@ -38,21 +38,48 @@ def test_verdict_needs_minimum_sample():
     assert str(MIN_TRADES) in why
 
 
+def test_verdict_extends_below_the_sample_floor_even_when_strong():
+    """A big edge on a small sample is still a small sample."""
+    decision, _ = verdict(stats(_trades([0.03, 0.02] * 40)))   # n=80, huge t-stat
+    assert decision == "EXTEND"
+
+
 def test_verdict_go_on_strong_edge():
-    decision, _ = verdict(stats(_trades([0.03, 0.02] * 40)))
+    decision, why = verdict(stats(_trades([0.03, 0.02] * 80)))  # n=160
     assert decision == "GO"
-
-
-def test_verdict_no_go_on_weak_t_stat():
-    returns = [0.30, -0.25] * 40          # high mean noise, t-stat near zero
-    decision, why = verdict(stats(returns and _trades(returns)))
-    assert decision == "NO-GO"
     assert "t-stat" in why
 
 
-def test_verdict_no_go_on_negative_mean():
-    decision, why = verdict(stats(_trades([-0.01] * 80)))
+def test_verdict_pilot_on_moderate_edge():
+    # mean +1.5%/trade with a realistic ~12% spread -> t about 1.5
+    decision, why = verdict(stats(_trades([0.135, -0.105] * 75)))
+    assert decision == "PILOT"
+    assert "half capital" in why
+
+
+def test_verdict_no_go_when_ci_rules_out_a_useful_edge():
+    # tiny but consistent edge: significant, and significantly too small to trade
+    decision, why = verdict(stats(_trades([0.005, -0.001] * 75)))
     assert decision == "NO-GO"
+    assert "CI" in why
+
+
+def test_verdict_no_go_on_negative_mean():
+    decision, why = verdict(stats(_trades([-0.01] * 160)))
+    assert decision == "NO-GO"
+    assert "not positive" in why
+
+
+def test_verdict_extends_when_too_weak_to_deploy_and_too_early_to_kill():
+    decision, why = verdict(stats(_trades([0.125, -0.115] * 75)))
+    assert decision == "EXTEND"
+    assert "too weak" in why
+
+
+def test_stats_reports_confidence_interval():
+    s = stats(_trades([0.10, -0.05, 0.20, -0.05]))
+    lo, hi = s["ci95"]
+    assert lo < s["mean_ret"] < hi
 
 
 def test_slippage_stats_groups_by_mode():

@@ -6,7 +6,7 @@ Order placement and trade logging. Routes to Alpaca (live/paper) or local simula
                                                                  timestamp, mode, status, order_id, success, error
 
     resolve_mode(mode) -> ('live'|'paper'|'sim')                 what will actually happen, given credentials
-    place_order(ticker, action, quantity, fill_price, mode='paper') -> OrderResult
+    place_order(ticker, action, quantity, fill_price, mode='paper', notional=None) -> OrderResult
     execute_signals(signals, actions, current_prices=None, mode='paper', risk_status=None) -> None
 
 Modes:
@@ -16,6 +16,10 @@ Modes:
     sim    local simulation: fills assumed at the intended price, no broker involved.
 
 Exits are placed in the mode recorded on the position, not the mode of the current run.
+
+Entries are sized by dollar amount (POSITION_SIZE_USD). Where the broker supports
+fractional shares the order is sent as a notional order, so a $500 slot buys $500 of a
+$1,800 stock instead of rounding to one share or skipping it.
 
 Entries are blocked when risk.py reports a breach; exits are always executed.
 """
@@ -27,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+import broker
 import risk
 from config import (
     POSITION_SIZE_USD,
@@ -53,7 +58,7 @@ _TERMINAL_STATUSES = {"filled", "canceled", "expired", "rejected", "done_for_day
 class OrderResult:
     ticker: str
     action: Literal["buy", "sell"]
-    quantity: int
+    quantity: float             # fractional where the broker supports it
     fill_price: float           # actual fill (broker) or assumed fill (sim)
     timestamp: str              # ISO 8601 UTC
     mode: Mode
@@ -69,6 +74,11 @@ def _append_trade_log(result: OrderResult) -> None:
     _log_path.parent.mkdir(parents=True, exist_ok=True)
     with _log_path.open("a") as f:
         f.write(json.dumps(asdict(result)) + "\n")
+
+
+def _fmt_qty(quantity: float) -> str:
+    """Share counts read as integers when they are whole, and as decimals when fractional."""
+    return str(int(quantity)) if float(quantity).is_integer() else f"{quantity:.4f}"
 
 
 def _slippage(action: str, intended: float, fill: float) -> float | None:
@@ -97,18 +107,27 @@ def resolve_mode(mode: str) -> Mode:
 def _place_alpaca_order(
     ticker: str,
     action: Literal["buy", "sell"],
-    quantity: int,
+    quantity: float,
     intended_price: float,
     mode: Literal["live", "paper"],
+    notional: float | None = None,
 ) -> OrderResult:
-    """Submit a market order to Alpaca and poll until it fills or the timeout expires."""
+    """Submit a market order to Alpaca and poll until it fills or the timeout expires.
+
+    `notional` buys a dollar amount rather than a share count (fractional symbols only).
+    """
     from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
 
     client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=(mode == "paper"))
     side = OrderSide.BUY if action == "buy" else OrderSide.SELL
-    req = MarketOrderRequest(symbol=ticker, qty=quantity, side=side, time_in_force=TimeInForce.DAY)
+    if notional is not None:
+        req = MarketOrderRequest(symbol=ticker, notional=round(notional, 2), side=side,
+                                 time_in_force=TimeInForce.DAY)
+    else:
+        req = MarketOrderRequest(symbol=ticker, qty=quantity, side=side,
+                                 time_in_force=TimeInForce.DAY)
 
     ts = datetime.now(timezone.utc).isoformat()
     try:
@@ -119,7 +138,7 @@ def _place_alpaca_order(
             order = client.get_order_by_id(order.id)
 
         status = order.status.value
-        filled_qty = int(float(order.filled_qty or 0))
+        filled_qty = float(order.filled_qty or 0)
         fill_price = float(order.filled_avg_price) if order.filled_avg_price else intended_price
         filled = status == "filled" or filled_qty > 0
 
@@ -133,7 +152,7 @@ def _place_alpaca_order(
         )
         slip = f"{result.slippage_pct:+.2%}" if result.slippage_pct is not None else "n/a"
         logger.info(
-            f"[ALPACA {mode.upper()}] {action.upper()} {result.quantity} {ticker} @ {fill_price:.2f} "
+            f"[ALPACA {mode.upper()}] {action.upper()} {_fmt_qty(result.quantity)} {ticker} @ {fill_price:.2f} "
             f"(intended {intended_price:.2f}, slippage {slip}, status={status}, id={order.id})"
         )
         if not filled:
@@ -153,15 +172,16 @@ def _place_alpaca_order(
 def place_order(
     ticker: str,
     action: Literal["buy", "sell"],
-    quantity: int,
+    quantity: float,
     fill_price: float,
     mode: str = "paper",
+    notional: float | None = None,
 ) -> OrderResult:
     """Place a buy or sell order. `fill_price` is the intended (signal) price."""
     effective = resolve_mode(mode)
 
     if effective in ("live", "paper"):
-        return _place_alpaca_order(ticker, action, quantity, fill_price, effective)
+        return _place_alpaca_order(ticker, action, quantity, fill_price, effective, notional)
 
     ts = datetime.now(timezone.utc).isoformat()
     result = OrderResult(
@@ -169,9 +189,29 @@ def place_order(
         timestamp=ts, mode="sim", success=True, error=None,
         intended_price=fill_price, slippage_pct=0.0, status="sim_filled",
     )
-    logger.info(f"[SIM] {action.upper()} {quantity} shares of {ticker} @ {fill_price:.2f}")
+    logger.info(f"[SIM] {action.upper()} {_fmt_qty(quantity)} shares of {ticker} @ {fill_price:.2f}")
     _append_trade_log(result)
     return result
+
+
+def _size_entry(ticker: str, price: float, mode: str) -> tuple[float, float | None]:
+    """Size one entry to POSITION_SIZE_USD.
+
+    Returns (quantity, notional). Fractional symbols are ordered by dollar amount, so a
+    $500 slot buys $500 of an $1,800 stock. Whole-share symbols round down and warn when
+    a single share overshoots the slot.
+    """
+    if broker.is_fractionable(ticker, mode):
+        return POSITION_SIZE_USD / price, POSITION_SIZE_USD
+
+    quantity = max(1, int(POSITION_SIZE_USD / price))
+    notional = quantity * price
+    if notional > POSITION_SIZE_USD * 1.5:
+        logger.warning(
+            f"{ticker} @ ${price:.2f}: 1 share is ${notional:.0f} vs ${POSITION_SIZE_USD:.0f} "
+            f"target slot and the symbol is not fractionable — position is oversized"
+        )
+    return quantity, None
 
 
 def execute_signals(
@@ -200,15 +240,9 @@ def execute_signals(
 
     for sig in wanted:
         price = sig.entry_price
-        quantity = max(1, int(POSITION_SIZE_USD / price))
-        notional = quantity * price
-        if notional > POSITION_SIZE_USD * 1.5:
-            logger.warning(
-                f"{sig.ticker} @ ${price:.2f}: 1 share is ${notional:.0f} vs "
-                f"${POSITION_SIZE_USD:.0f} target slot — position is oversized"
-            )
+        quantity, notional = _size_entry(sig.ticker, price, mode)
 
-        result = place_order(sig.ticker, "buy", quantity, fill_price=price, mode=mode)
+        result = place_order(sig.ticker, "buy", quantity, fill_price=price, mode=mode, notional=notional)
         if not result.success:
             logger.error(f"Buy failed for {sig.ticker}, no position opened: {result.error}")
             notify(f"⚠️ *BUY FAILED {sig.ticker}* — {result.error}")
@@ -226,10 +260,10 @@ def execute_signals(
         add_position(new_pos)
         logger.info(
             f"Opened position: {sig.ticker} @ {result.fill_price:.2f}, "
-            f"stop={sig.initial_stop:.2f}, qty={result.quantity}"
+            f"stop={sig.initial_stop:.2f}, qty={_fmt_qty(result.quantity)}"
         )
         notify(
-            f"📈 *BUY {sig.ticker}* — {result.quantity} shares @ ${result.fill_price:.2f} "
+            f"📈 *BUY {sig.ticker}* — {_fmt_qty(result.quantity)} shares @ ${result.fill_price:.2f} "
             f"| stop ${sig.initial_stop:.2f}"
         )
 
@@ -258,7 +292,7 @@ def execute_signals(
             remove_position(act.ticker)
             logger.info(f"Closed position: {act.ticker} @ {result.fill_price:.2f}, reason={act.reason}")
             notify(
-                f"📉 *SELL {act.ticker}* — {result.quantity} shares @ ${result.fill_price:.2f} "
+                f"📉 *SELL {act.ticker}* — {_fmt_qty(result.quantity)} shares @ ${result.fill_price:.2f} "
                 f"| reason: {act.reason}"
             )
 

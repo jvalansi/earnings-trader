@@ -120,6 +120,10 @@ Current values: see [`src/config.py`](src/config.py).
 
 ### `data/prices.py`
 
+`get_latest_price()` is what position management uses — the daily bar's last row is still
+yesterday's close at 9:30, so reading it there dates every stop check by a session.
+`get_prior_close()` and `get_today_open()` resolve the same ambiguity explicitly.
+
 ```python
 def get_ohlcv(ticker: str, days: int) -> pd.DataFrame: ...
 def get_atr(ticker: str, period: int = 14) -> float: ...
@@ -213,7 +217,7 @@ def evaluate_positions(positions, current_prices, current_atrs) -> list[Position
 
 ```python
 def resolve_mode(mode: str) -> Literal["live", "paper", "sim"]: ...
-def place_order(ticker, action, quantity, fill_price, mode="paper") -> OrderResult: ...
+def place_order(ticker, action, quantity, fill_price, mode="paper", notional=None) -> OrderResult: ...
 def execute_signals(
     signals: list[EntrySignal],
     actions: list[PositionAction],

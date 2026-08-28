@@ -2,6 +2,9 @@
 Price data from yfinance. All % changes are fractional (0.05 = 5%).
 
     get_ohlcv(ticker, days)          -> pd.DataFrame   columns: Open High Low Close Volume
+    get_latest_price(ticker)         -> float          last traded price right now
+    get_prior_close(ticker)          -> float          close of the last completed session
+    get_today_open(ticker)           -> float | None   today's opening print, None before it exists
     get_atr(ticker, period=14)       -> float          Average True Range (Wilder smoothing)
     get_ah_move(ticker, date)        -> float          after-hours % move vs regular close
     get_premarket_move(ticker, date) -> float          pre-market % move vs prior regular close
@@ -32,6 +35,66 @@ def get_ohlcv(ticker: str, days: int) -> pd.DataFrame:
         raise ValueError(f"No OHLCV data for {ticker}")
     df = df[["Open", "High", "Low", "Close", "Volume"]].tail(days)
     return df
+
+
+def get_latest_price(ticker: str) -> float:
+    """Last traded price as of now.
+
+    The daily bar is useless for this at 9:30 — yfinance has not formed today's bar yet,
+    so its last row is still yesterday's close. Position management ran on that stale
+    close for months. Prefer Alpaca's last trade, fall back to yfinance intraday, and
+    only then to the daily bar.
+    """
+    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY
+
+    if ALPACA_API_KEY and ALPACA_SECRET_KEY:
+        try:
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestTradeRequest
+
+            client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+            trade = client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=ticker))
+            price = float(trade[ticker].price)
+            if price > 0:
+                return price
+        except Exception as e:
+            logger.warning(f"Alpaca last trade failed for {ticker}: {e}")
+
+    try:
+        df = yf.Ticker(ticker).history(period="1d", interval="1m")
+        if not df.empty:
+            return float(df["Close"].iloc[-1])
+    except Exception as e:
+        logger.warning(f"Intraday price failed for {ticker}: {e}")
+
+    logger.warning(f"Falling back to the daily bar for {ticker} — price may be stale")
+    return float(get_ohlcv(ticker, days=1)["Close"].iloc[-1])
+
+
+def _today_et() -> str:
+    return datetime.now(EASTERN).strftime("%Y-%m-%d")
+
+
+def get_prior_close(ticker: str) -> float:
+    """Close of the last completed session, never today's partial bar."""
+    df = get_ohlcv(ticker, days=5)
+    dates = [str(i)[:10] for i in df.index]
+    today = _today_et()
+    closes = [c for d, c in zip(dates, df["Close"]) if d < today]
+    if not closes:
+        raise ValueError(f"No completed session for {ticker}")
+    return float(closes[-1])
+
+
+def get_today_open(ticker: str) -> float | None:
+    """Today's opening print, or None if the session has not opened yet."""
+    df = get_ohlcv(ticker, days=5)
+    dates = [str(i)[:10] for i in df.index]
+    today = _today_et()
+    for d, o in zip(dates, df["Open"]):
+        if d == today:
+            return float(o)
+    return None
 
 
 def get_atr(ticker: str, period: int = 14) -> float:

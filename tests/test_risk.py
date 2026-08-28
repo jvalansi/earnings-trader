@@ -118,3 +118,22 @@ def test_state_is_persisted(trades, capital):
 def test_status_line_reports_halt(trades, capital):
     risk.halt("manual")
     assert "HALTED" in risk.status_line(risk.evaluate_risk(today="2026-05-01"))
+
+
+def test_mark_to_market_is_zero_before_the_epoch_exists(trades, capital):
+    """Guards a real incident: the first evaluation marked the entire legacy book,
+    inflating peak equity and tripping the breaker on the next run."""
+    old = Position("OLD", entry_price=100.0, current_stop=90.0, entry_date="2026-04-01",
+                   day_count=5, quantity=10)
+    assert risk.epoch_ts() is None
+    assert risk.mark_to_market([old], {"OLD": 200.0}) == 0.0
+
+
+def test_first_evaluation_does_not_trip_on_a_legacy_book(trades, capital):
+    old = Position("OLD", entry_price=100.0, current_stop=90.0, entry_date="2026-04-01",
+                   day_count=5, quantity=10)
+    prices = {"OLD": 168.0}
+    first = risk.evaluate_risk(today="2026-05-01", unrealized_pnl=risk.mark_to_market([old], prices))
+    second = risk.evaluate_risk(today="2026-05-02", unrealized_pnl=risk.mark_to_market([old], prices))
+    assert first.equity == 5000.0
+    assert second.entries_allowed is True

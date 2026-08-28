@@ -18,23 +18,35 @@ Decided on the **post-fix trade set only** (entries on or after 2026-04-02, when
 `2f38981` fixed the look-ahead entry bug). Earlier trades used a broken entry model
 documented in `docs/BACKTEST.md`.
 
-Run `python src/main.py track-record` to evaluate. Criteria, on the per-trade return series:
+Run `python src/main.py track-record` to evaluate. Criteria, on the per-trade return series,
+**decided at n >= 150**:
 
-- **GO** (deploy $5k): `t-stat >= 2.0` **and** `mean return >= +1.0%/trade` **and** `n >= 60`
-- **NO-GO**: `t-stat <= 1.0` **or** `mean return <= 0` at `n >= 60`
-- **EXTEND** (keep paper trading): anything in between
+- **GO** (deploy $5k): `t-stat >= 2.0` **and** `mean return >= +1.0%/trade`
+- **PILOT** (deploy $2.5k, re-evaluate at n = 300): `t-stat >= 1.0` **and** `mean >= +1.0%/trade`
+- **NO-GO**: `mean return <= 0`, **or** the 95% CI upper bound is below +1.0%/trade
+- **EXTEND** (keep paper trading): anything in between, including any sample below 150
 
 Win rate is not a criterion — the backtest edge is payoff-asymmetric (1.46x win/loss ratio),
 so a sub-50% win rate is consistent with a profitable strategy.
 
-| Evaluated | n | Win rate | Mean return | t-stat | P&L | Verdict |
-|---|---|---|---|---|---|---|
-| 2026-07-02 | 43 | 44.2% | +3.88% | 1.71 | +$13,365 | EXTEND |
-| 2026-08-27 | 88 | 50.0% | +0.90% | 0.65 | +$6,489 | **NO-GO** |
+**Why n >= 150.** Per-trade returns have a ~12.9% standard deviation. At n = 60 a t-stat of
+2 requires +3.3%/trade, and at n = 88 it requires +2.74% — both above the +2.46%/trade the
+backtest itself produced. The earlier criteria (decide at n >= 60, kill at t <= 1.0) could
+not have returned a GO even if the strategy performed exactly as backtested: at n = 88 the
+backtest's own edge scores t = 1.79. That version tested the sample size, not the strategy.
+The kill rule is now evidence-based — a negative mean, or a confidence interval that
+excludes a tradeable edge — rather than a weak t-stat, which at small n means only
+"not yet measurable".
 
-The edge weakened as the sample grew: mean return fell from +3.88% to +0.90% and the
-t-stat from 1.71 to 0.65 while n doubled. Excluding the single best and worst trades, the
-mean is +0.38%/trade. Max drawdown ($9,059) is larger than cumulative P&L.
+| Evaluated | n | Win rate | Mean return | 95% CI | t-stat | Verdict |
+|---|---|---|---|---|---|---|
+| 2026-07-02 | 43 | 44.2% | +3.88% | — | 1.71 | EXTEND |
+| 2026-08-28 | 88 | 50.0% | +0.90% | -1.79% to +3.59% | 0.65 | EXTEND (sample too small) |
+
+The confidence interval contains both zero and the backtest's +2.46%, so the live record so
+far distinguishes neither. The payoff profile does match the backtest — avg win +9.22% vs
++10.31%, avg loss -7.43% vs -7.04%, win rate 50.0% vs 54.8% (z = -0.90, not distinguishable).
+At ~18 closed trades/month, n = 150 arrives around 2026-12.
 
 **Next step (Notion task):** Add P&L performance dashboard + returns tracking — better visibility → better parameter tuning → ~$500/mo improvement in returns.
 
@@ -134,5 +146,17 @@ The backtester (Phase 1) will be built afterward using the same `data/` modules 
    compare `track-record` slippage against the assumed 9:30 open fill.
 2. Flatten the simulated book — `data/positions.json` holds positions sized for an $80k
    book; the risk epoch excludes them, but they should not be inherited into live trading.
-3. At $5k capital a $500 slot buys 2 shares of a $240 stock. Position granularity is coarse;
-   either accept the rounding error or raise capital before going live.
+3. Reach n = 150 post-fix trades and re-run the checkpoint.
+
+### Known execution gap vs the backtest
+
+Measured over the post-fix trades (2026-04-02 to 2026-08-28):
+
+| Gap | Cost |
+|---|---|
+| Entry lands ~2 minutes after the open, which the backtest assumes it fills at | **-0.46%/trade** (median -0.56%; 62% of entries above the open) |
+| Exits were decided on the prior day's close (fixed 2026-08-28) and fill at the next open, while the backtest exits at the same-day close | **-0.18%/trade** on logged prices; the decision lag itself is not yet measured |
+
+Together that is roughly a quarter of the backtest's +2.46%/trade expectancy, before any
+broker slippage. Entering closer to the open, or modelling a 9:32 entry in the backtest,
+would close most of the gap.

@@ -125,9 +125,46 @@ def test_place_order_broker_exception_is_captured(with_broker):
     assert "connection reset" in result.error
 
 
+# --- sizing ---
+
+def test_size_entry_uses_notional_for_fractionable_symbols(monkeypatch):
+    monkeypatch.setattr(execution.broker, "is_fractionable", lambda t, mode="paper": True)
+    quantity, notional = execution._size_entry("ASML", 1800.0, "paper")
+    assert notional == POSITION_SIZE_USD
+    assert quantity == pytest.approx(POSITION_SIZE_USD / 1800.0)
+
+
+def test_size_entry_rounds_down_for_whole_share_symbols(monkeypatch):
+    monkeypatch.setattr(execution.broker, "is_fractionable", lambda t, mode="paper": False)
+    quantity, notional = execution._size_entry("JRSH", 12.0, "paper")
+    assert notional is None
+    assert quantity == int(POSITION_SIZE_USD / 12.0)
+
+
+def test_size_entry_never_returns_zero_shares(monkeypatch):
+    monkeypatch.setattr(execution.broker, "is_fractionable", lambda t, mode="paper": False)
+    quantity, notional = execution._size_entry("ASML", 1800.0, "paper")
+    assert quantity == 1
+
+
+def test_place_order_sends_notional_request(with_broker):
+    with_broker.submit_order.return_value = _alpaca_order(filled_qty="0.2757", filled_avg_price="1814.0")
+    result = place_order("ASML", "buy", 0.2757, fill_price=1800.0, mode="paper", notional=500.0)
+    request = with_broker.submit_order.call_args[0][0]
+    assert request.notional == 500.0
+    assert request.qty is None
+    assert result.quantity == pytest.approx(0.2757)
+
+
+def test_fmt_qty():
+    assert execution._fmt_qty(5.0) == "5"
+    assert execution._fmt_qty(0.2757) == "0.2757"
+
+
 # --- execute_signals ---
 
-def test_execute_signals_buy_sizes_position_from_capital():
+def test_execute_signals_buy_sizes_position_from_capital(monkeypatch):
+    monkeypatch.setattr(execution.broker, "is_fractionable", lambda t, mode="paper": False)
     sig = _entry_signal(entry_price=100.0)
     expected_qty = max(1, int(POSITION_SIZE_USD / 100.0))
     with patch("execution.place_order") as mock_order, \
@@ -137,8 +174,22 @@ def test_execute_signals_buy_sizes_position_from_capital():
             ticker="AAPL", action="buy", quantity=expected_qty, fill_price=100.0,
             timestamp="", mode="sim", success=True, error=None, intended_price=100.0)
         execute_signals([sig], [], mode="paper")
-    mock_order.assert_called_once_with("AAPL", "buy", expected_qty, fill_price=100.0, mode="paper")
+    mock_order.assert_called_once_with("AAPL", "buy", expected_qty, fill_price=100.0,
+                                       mode="paper", notional=None)
     mock_add.assert_called_once()
+
+
+def test_execute_signals_buy_passes_notional_for_fractionable(monkeypatch):
+    monkeypatch.setattr(execution.broker, "is_fractionable", lambda t, mode="paper": True)
+    sig = _entry_signal(entry_price=100.0)
+    with patch("execution.place_order") as mock_order, \
+         patch("execution.add_position"), \
+         patch("execution.notify"):
+        mock_order.return_value = execution.OrderResult(
+            ticker="AAPL", action="buy", quantity=5.0, fill_price=100.0,
+            timestamp="", mode="paper", success=True, error=None, intended_price=100.0)
+        execute_signals([sig], [], mode="paper")
+    assert mock_order.call_args.kwargs["notional"] == POSITION_SIZE_USD
 
 
 def test_execute_signals_buy_uses_actual_fill_as_entry_price():

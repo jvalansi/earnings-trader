@@ -13,7 +13,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify, notify_thread
 from data.earnings import get_earnings_calendar_details, get_earnings_surprise
-from data.prices import get_ohlcv, get_atr, get_prior_runup
+from data.prices import get_ohlcv, get_atr, get_prior_runup, get_latest_price, get_prior_close, get_today_open
 from data.sector import get_sector_intraday_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
@@ -113,10 +113,10 @@ def run_scan_cycle(mode: str = "paper") -> None:
     for pos in positions:
         pos.day_count += 1
         try:
-            df = get_ohlcv(pos.ticker, days=2)
-            current_prices[pos.ticker] = float(df["Close"].iloc[-1])
-            if len(df) >= 2:
-                prev_prices[pos.ticker] = float(df["Close"].iloc[-2])
+            # Live quote, not the daily bar: at 9:30 yfinance's last daily row is still
+            # yesterday's close, which would date every stop check by a full session.
+            current_prices[pos.ticker] = get_latest_price(pos.ticker)
+            prev_prices[pos.ticker] = get_prior_close(pos.ticker)
             current_atrs[pos.ticker] = get_atr(pos.ticker)
         except Exception as e:
             logger.error(f"Error fetching data for {pos.ticker}: {e}", exc_info=True)
@@ -156,10 +156,12 @@ def run_scan_cycle(mode: str = "paper") -> None:
             prior_runup = get_prior_runup(ticker)
             sector_move = get_sector_intraday_move(ticker, today)
             atr = get_atr(ticker)
-            df = get_ohlcv(ticker, days=2)
-            current_price = float(df["Close"].iloc[-1])
-            prior_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else current_price
-            overnight_gap = (current_price / prior_close) - 1.0
+            # Signal from the opening print vs the prior close — the same overnight gap
+            # the backtest measures. The entry itself fills at the current quote.
+            prior_close = get_prior_close(ticker)
+            current_price = get_latest_price(ticker)
+            today_open = get_today_open(ticker)
+            overnight_gap = ((today_open or current_price) / prior_close) - 1.0
 
             sig = evaluate_entry(
                 ticker=ticker,
@@ -172,7 +174,11 @@ def run_scan_cycle(mode: str = "paper") -> None:
                 open_positions=open_positions,
             )
             signals.append(sig)
-            logger.info(f"{ticker}: should_enter={sig.should_enter}, gap={overnight_gap:.1%}, filters={sig.filters_passed}")
+            logger.info(
+                f"{ticker}: should_enter={sig.should_enter}, gap={overnight_gap:.1%} "
+                f"(open {today_open}, prior close {prior_close:.2f}, now {current_price:.2f}), "
+                f"filters={sig.filters_passed}"
+            )
 
         except Exception as e:
             logger.error(f"Error processing {ticker}: {e}", exc_info=True)

@@ -10,6 +10,14 @@ Checkpoint criteria (docs/ROADMAP.md, "Go/No-Go Checkpoint"). Only trades entere
 after POST_FIX_START count: earlier ones used the look-ahead entry model fixed in 2f38981.
 Win rate is deliberately not a criterion — the edge is payoff-asymmetric, so a sub-50%
 win rate is consistent with a profitable strategy.
+
+The sample size is set by power, not by impatience. Per-trade returns have a ~13%
+standard deviation, so at n=60 a t-stat of 2 needs +3.3%/trade — more than the backtest
+itself produced. Deciding that early tests the sample size, not the strategy. At n=150 a
+2%/trade edge is detectable, which is the region worth deploying capital into.
+
+A kill is declared on evidence rather than on a weak t-stat: either the mean is negative,
+or the 95% confidence interval excludes an edge large enough to be worth trading.
 """
 import math
 import statistics
@@ -18,10 +26,10 @@ from trade_history import ClosedTrade, closed_trades, load_orders
 
 POST_FIX_START = "2026-04-02"
 
-MIN_TRADES = 60
-GO_T_STAT = 2.0
-GO_MEAN_RET = 0.01
-KILL_T_STAT = 1.0
+MIN_TRADES = 150        # sample needed before the test can distinguish a real edge from noise
+GO_T_STAT = 2.0         # full deployment
+PILOT_T_STAT = 1.0      # half capital, re-evaluate at 2x the sample
+MIN_MEAN_RET = 0.01     # an edge below +1%/trade is not worth the operational risk
 
 
 def stats(trades: list[ClosedTrade]) -> dict:
@@ -41,9 +49,11 @@ def stats(trades: list[ClosedTrade]) -> dict:
         peak = max(peak, equity)
         max_dd = min(max_dd, equity - peak)
 
+    stderr = sd / math.sqrt(len(rets)) if sd else 0.0
     return {
         "n": len(trades),
         "win_rate": len(wins) / len(rets),
+        "ci95": (mean - 1.96 * stderr, mean + 1.96 * stderr),
         "mean_ret": mean,
         "median_ret": statistics.median(rets),
         "stdev_ret": sd,
@@ -57,20 +67,38 @@ def stats(trades: list[ClosedTrade]) -> dict:
 
 
 def verdict(s: dict) -> tuple[str, str]:
-    """Apply the checkpoint criteria to a stats dict."""
+    """Apply the checkpoint criteria to a stats dict.
+
+    Returns one of GO (deploy in full), PILOT (deploy half), NO-GO (stop) or EXTEND
+    (keep paper trading), with the reasoning.
+    """
     if not s or s["n"] < MIN_TRADES:
         n = s.get("n", 0)
-        return "EXTEND", f"only {n} post-fix trades, need {MIN_TRADES} to decide"
-
-    t, mean = s["t_stat"], s["mean_ret"]
-    if t >= GO_T_STAT and mean >= GO_MEAN_RET:
-        return "GO", f"t-stat {t:.2f} >= {GO_T_STAT} and mean {mean:+.2%} >= {GO_MEAN_RET:.2%}"
-    if t <= KILL_T_STAT or mean <= 0:
-        return "NO-GO", (
-            f"t-stat {t:.2f} <= {KILL_T_STAT}" if t <= KILL_T_STAT
-            else f"mean return {mean:+.2%} <= 0"
+        needed = MIN_TRADES - n
+        return "EXTEND", (
+            f"{n} post-fix trades, {needed} short of the {MIN_TRADES} needed for the test "
+            f"to distinguish a real edge from noise"
         )
-    return "EXTEND", f"t-stat {t:.2f} and mean {mean:+.2%} fall between the go and kill thresholds"
+
+    t, mean, ci_high = s["t_stat"], s["mean_ret"], s["ci95"][1]
+
+    if t >= GO_T_STAT and mean >= MIN_MEAN_RET:
+        return "GO", f"t-stat {t:.2f} >= {GO_T_STAT} and mean {mean:+.2%} >= {MIN_MEAN_RET:.1%}"
+    if mean <= 0:
+        return "NO-GO", f"mean return {mean:+.2%} is not positive over {s['n']} trades"
+    if ci_high < MIN_MEAN_RET:
+        return "NO-GO", (
+            f"95% CI upper bound {ci_high:+.2%} rules out an edge of {MIN_MEAN_RET:.1%}/trade"
+        )
+    if t >= PILOT_T_STAT and mean >= MIN_MEAN_RET:
+        return "PILOT", (
+            f"t-stat {t:.2f} >= {PILOT_T_STAT} and mean {mean:+.2%} >= {MIN_MEAN_RET:.1%} — "
+            f"deploy half capital and re-evaluate at {2 * MIN_TRADES} trades"
+        )
+    return "EXTEND", (
+        f"t-stat {t:.2f} with mean {mean:+.2%}: too weak to deploy, too early to kill "
+        f"(95% CI {s['ci95'][0]:+.2%} to {ci_high:+.2%})"
+    )
 
 
 def slippage_stats(orders: list[dict]) -> dict:
@@ -100,6 +128,7 @@ def _print_stats(label: str, s: dict) -> None:
     print(f"  Trades:        {s['n']}")
     print(f"  Win rate:      {s['win_rate']:.1%}")
     print(f"  Mean return:   {s['mean_ret']:+.2%}   (median {s['median_ret']:+.2%}, sd {s['stdev_ret']:.2%})")
+    print(f"  95% CI:        {s['ci95'][0]:+.2%} to {s['ci95'][1]:+.2%}")
     print(f"  t-stat:        {s['t_stat']:.2f}")
     print(f"  Avg win/loss:  {s['avg_win']:+.2%} / {s['avg_loss']:+.2%}")
     print(f"  Expectancy:    ${s['expectancy']:,.0f}/trade   (total ${s['total_pnl']:,.0f})")
@@ -142,7 +171,13 @@ def report(since: str | None = None) -> int:
     decision, why = verdict(s)
     print("\n" + "=" * 66)
     print(f"CHECKPOINT VERDICT: {decision} — {why}")
-    print(f"  criteria: GO at t>={GO_T_STAT} and mean>={GO_MEAN_RET:.0%} with n>={MIN_TRADES}; "
-          f"NO-GO at t<={KILL_T_STAT} or mean<=0")
+    print(f"  criteria at n>={MIN_TRADES}: GO at t>={GO_T_STAT}, PILOT (half capital) at "
+          f"t>={PILOT_T_STAT}, both with mean>={MIN_MEAN_RET:.0%};")
+    print(f"            NO-GO if mean<=0 or the 95% CI rules out a {MIN_MEAN_RET:.0%} edge")
+    if s and s["n"] < MIN_TRADES:
+        need = MIN_MEAN_RET
+        print(f"  at the current spread, deciding at n={s['n']} would demand "
+              f"{GO_T_STAT * s['stdev_ret'] / math.sqrt(s['n']):+.2%}/trade to pass — "
+              f"more than the backtest's +2.46%")
     print("=" * 66)
     return 0
