@@ -148,6 +148,14 @@ The backtester (Phase 1) will be built afterward using the same `data/` modules 
    book; the risk epoch excludes them, but they should not be inherited into live trading.
 3. Reach n = 150 post-fix trades and re-run the checkpoint.
 
+### Is the edge still there?
+
+A backtest replay over the same window as the live paper record (2026-04-02 to 2026-08-27)
+returns **-1.24%/trade over 98 trades** — worse than the +0.90% live actually produced. See
+`docs/BACKTEST.md`. The strategy's 2022–24 result (+2.46%/trade) has not reproduced in 2026
+in either the simulation or the live record, and that gap, not execution quality, is the
+thing to resolve before deploying capital.
+
 ### Known execution gap vs the backtest
 
 Measured over the post-fix trades (2026-04-02 to 2026-08-28):

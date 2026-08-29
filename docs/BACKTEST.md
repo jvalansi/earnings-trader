@@ -106,6 +106,38 @@ Out-of-sample held — no significant degradation vs in-sample.
 
 ---
 
+### Replay over the live paper window (2026-04-02 → 2026-08-27)
+
+Run to separate implementation drag from a fading edge. Same code, same period the live
+paper record covers:
+
+| | Backtest replay | Live paper |
+|---|---|---|
+| Closed trades | 98 | 88 |
+| Win rate | 39.8% | 50.0% |
+| Avg return | **-1.24%/trade** | **+0.90%/trade** |
+| Avg win / avg loss | +11.51% / -9.66% | +9.22% / -7.43% |
+| Sharpe (annl.) | -0.35 | — |
+| Exit mix | 40 stops / 58 time exits | ~30% stops |
+
+The simulation of this period is *worse* than what live actually traded, so the shortfall
+against the 2022–24 backtest (+2.46%/trade) is not explained by execution drag — the
+implementation gap runs the other way. Either the edge decayed, this window was simply
+hostile to PEAD, or the 2022–24 result was optimistic. That is the open question before
+any capital is deployed.
+
+Caveat on comparability: the two runs only share **26% of their entries** (25 tickers in
+common out of 98 live / 105 backtest, 21 on the same date). The live scan can only trade
+what FMP has published by 9:32, applies a yfinance exchange/equity filter, and diverges on
+capacity once the two books differ. The difference between +0.90% and -1.24% is itself
+within noise at these sample sizes (SE of the difference ≈ 1.9%/trade).
+
+Next diagnostic: replay 2025 to see whether the decay is recent, and reconcile the entry
+divergence so the backtest is a valid proxy for what production actually trades. Both are
+FMP-quota bound (the free tier is 250 requests/day).
+
+---
+
 ### Parameter sweep (2022–2023)
 
 80 param combos × 4 price filters = 320 rows. Saved to `data/backtest_results/sweep_20260402_013648.json`.
