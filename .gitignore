@@ -1,6 +1,7 @@
 .env
 data/positions.json
 data/trades_log.jsonl
+data/replay_coverage.json
 __pycache__/
 *.pyc
 .venv/
