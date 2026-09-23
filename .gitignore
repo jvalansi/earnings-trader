@@ -7,3 +7,8 @@ __pycache__/
 .venv/
 *.egg-info/
 src/data/backtest_results/
+
+# Backtest artifacts and runtime risk state
+data/backtest_cache/
+data/backtest_results/
+data/risk_state.json
