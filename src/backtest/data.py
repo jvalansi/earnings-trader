@@ -34,11 +34,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 
 from config import FMP_API_KEY, LOOKBACK_DAYS
 from data.earnings import EarningsSurprise, _beat_pct
-from data.sector import SECTOR_ETF_MAP, FALLBACK_ETF
+from data.sector import SECTOR_ETF_MAP, FALLBACK_ETF, _fmp_sectors
 
 logger = logging.getLogger(__name__)
 
@@ -338,17 +337,20 @@ def is_us_equity_cached(ticker: str) -> bool:
 
 
 def get_sector_etf_cached(ticker: str) -> str:
-    """Return sector ETF symbol for ticker, cached to disk."""
+    """Return sector ETF symbol for ticker, cached to disk.
+
+    Uses FMP's bulk sector map only — no per-ticker yfinance .info, which is
+    rate-limited and whose failures, cached as SPY, used to pin ~1 in 6 tickers to
+    SPY permanently. Tickers FMP doesn't know get SPY uncached (free to recheck).
+    """
     _ensure_cache_dir()
     cache_path = CACHE_DIR / f"sector_{ticker}.json"
     if cache_path.exists():
         with cache_path.open("r") as f:
             return json.load(f).get("etf", FALLBACK_ETF)
-    try:
-        info = yf.Ticker(ticker).info
-        etf = SECTOR_ETF_MAP.get(info.get("sector", ""), FALLBACK_ETF)
-    except Exception:
-        etf = FALLBACK_ETF
-    with cache_path.open("w") as f:
-        json.dump({"etf": etf}, f)
+    sector = _fmp_sectors().get(ticker)
+    etf = SECTOR_ETF_MAP.get(sector or "", FALLBACK_ETF)
+    if sector:
+        with cache_path.open("w") as f:
+            json.dump({"etf": etf}, f)
     return etf

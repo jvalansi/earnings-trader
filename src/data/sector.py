@@ -1,14 +1,24 @@
 """
-Sector ETF data via yfinance. Falls back to SPY for unknown sectors.
+Sector ETF data. Sector comes from FMP's bulk stock screener (one call, cached for
+SECTOR_MAP_MAX_AGE_DAYS), with yfinance .info as the fallback for tickers it lacks.
+yfinance .info alone is rate-limited hard enough that it silently mapped ~1 in 6
+tickers to SPY. Falls back to SPY for unknown sectors.
 
     get_exchange(ticker)            -> str     yfinance exchange code (e.g. 'NMS', 'NYQ')
+    lookup_sector(ticker)          -> str | None  sector name; None if no source answered
     get_sector_etf(ticker)         -> str     sector ETF symbol (e.g. 'XLK', 'XLF')
     get_sector_move(ticker, date)  -> float   sector ETF daily % change (fractional)
 """
+import json
 import logging
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import requests
 import yfinance as yf
+
+from config import FMP_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +38,36 @@ SECTOR_ETF_MAP: dict[str, str] = {
 }
 FALLBACK_ETF = "SPY"
 
+SECTOR_MAP_FILE = Path(__file__).resolve().parents[2] / "data" / "sector_map.json"
+SECTOR_MAP_MAX_AGE_DAYS = 30
+_SCREENER_URL = "https://financialmodelingprep.com/api/v3/stock-screener"
+_sector_map: dict[str, str] | None = None
+
+
+def _fmp_sectors() -> dict[str, str]:
+    """Ticker -> sector for US-listed stocks, from FMP's screener (disk-cached)."""
+    global _sector_map
+    if _sector_map is not None:
+        return _sector_map
+    fresh = SECTOR_MAP_FILE.exists() and (
+        time.time() - SECTOR_MAP_FILE.stat().st_mtime < SECTOR_MAP_MAX_AGE_DAYS * 86400
+    )
+    if not fresh and FMP_API_KEY:
+        try:
+            resp = requests.get(_SCREENER_URL, params={
+                "exchange": "NYSE,NASDAQ,AMEX", "isEtf": "false", "isFund": "false",
+                "limit": 20000, "apikey": FMP_API_KEY,
+            }, timeout=60)
+            resp.raise_for_status()
+            mapping = {r["symbol"]: r["sector"] for r in resp.json() if r.get("symbol") and r.get("sector")}
+            if mapping:
+                SECTOR_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+                SECTOR_MAP_FILE.write_text(json.dumps(mapping))
+        except Exception as e:
+            logger.warning(f"FMP sector map refresh failed, using cached copy if any: {e}")
+    _sector_map = json.loads(SECTOR_MAP_FILE.read_text()) if SECTOR_MAP_FILE.exists() else {}
+    return _sector_map
+
 
 def get_exchange(ticker: str) -> str:
     """Return the yfinance exchange code for a ticker (e.g. 'NYQ', 'NMS').
@@ -41,21 +81,28 @@ def get_exchange(ticker: str) -> str:
         return ""
 
 
+def lookup_sector(ticker: str) -> str | None:
+    """Return the sector name for a stock, or None if neither FMP nor yfinance answered."""
+    sector = _fmp_sectors().get(ticker)
+    if sector:
+        return sector
+    try:
+        return yf.Ticker(ticker).info.get("sector") or None
+    except Exception as e:
+        logger.warning(f"Could not get sector for {ticker}: {e}")
+        return None
+
+
 def get_sector_etf(ticker: str) -> str:
     """Return the sector ETF symbol for a given stock (e.g. 'XLK', 'XLF').
 
     Falls back to 'SPY' if sector cannot be determined.
     """
-    try:
-        info = yf.Ticker(ticker).info
-        sector = info.get("sector", "")
-        etf = SECTOR_ETF_MAP.get(sector, FALLBACK_ETF)
-        if etf == FALLBACK_ETF and sector:
-            logger.warning(f"Unknown sector '{sector}' for {ticker}, using SPY")
-        return etf
-    except Exception as e:
-        logger.warning(f"Could not get sector for {ticker}: {e}. Using SPY.")
-        return FALLBACK_ETF
+    sector = lookup_sector(ticker)
+    etf = SECTOR_ETF_MAP.get(sector or "", FALLBACK_ETF)
+    if etf == FALLBACK_ETF:
+        logger.warning(f"No sector ETF for {ticker} (sector={sector!r}), using SPY")
+    return etf
 
 
 def get_sector_intraday_move(ticker: str, date: str) -> float:

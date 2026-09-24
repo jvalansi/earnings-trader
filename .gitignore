@@ -12,3 +12,4 @@ src/data/backtest_results/
 data/backtest_cache/
 data/backtest_results/
 data/risk_state.json
+data/sector_map.json

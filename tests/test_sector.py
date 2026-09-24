@@ -68,3 +68,24 @@ def test_get_sector_move_insufficient_data_raises():
     with patch("data.sector.yf.Ticker", side_effect=mock_ticker):
         with pytest.raises(ValueError):
             get_sector_move("AAPL", "2026-01-15")
+
+
+# --- FMP sector map + backtest cache ---
+
+def test_get_sector_etf_prefers_fmp_map(monkeypatch):
+    import data.sector
+    monkeypatch.setattr(data.sector, "_sector_map", {"ABT": "Healthcare"})
+    with patch("data.sector.yf.Ticker", side_effect=Exception("rate limited")):
+        assert get_sector_etf("ABT") == "XLV"
+
+
+def test_backtest_sector_cache_uses_fmp_map_only(tmp_path, monkeypatch):
+    import backtest.data as bd
+    import data.sector
+    monkeypatch.setattr(bd, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(data.sector, "_sector_map", {"ABT": "Healthcare"})
+    with patch("data.sector.yf.Ticker", side_effect=AssertionError("backtest must not call yfinance")):
+        assert bd.get_sector_etf_cached("ABT") == "XLV"
+        assert bd.get_sector_etf_cached("ZZZW") == "SPY"
+    assert (tmp_path / "sector_ABT.json").exists()
+    assert not (tmp_path / "sector_ZZZW.json").exists()  # unknown must not be pinned

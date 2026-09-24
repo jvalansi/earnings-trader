@@ -35,6 +35,10 @@ def isolate_runtime_files(tmp_path, monkeypatch):
     monkeypatch.setattr(risk, "_state_path", tmp_path / "risk_state.json")
     monkeypatch.setattr(risk, "_halt_path", tmp_path / "HALT")
 
+    # Empty FMP sector map, so sector tests exercise yfinance mocks without network or data/
+    import data.sector
+    monkeypatch.setattr(data.sector, "_sector_map", {})
+
 
 @pytest.fixture(autouse=True)
 def no_broker(monkeypatch):
