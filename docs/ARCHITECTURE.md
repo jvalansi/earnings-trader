@@ -297,6 +297,6 @@ start in live mode if either fails.
 
 | Data | Source | Notes |
 |---|---|---|
-| EPS / revenue actuals + estimates | [Financial Modeling Prep (FMP)](https://financialmodelingprep.com) | Free tier: 250 req/day |
+| EPS / revenue actuals + estimates | [Financial Modeling Prep (FMP)](https://financialmodelingprep.com) | Premium plan: 750 req/min |
 | OHLCV prices, ATR, AH/pre-market move | [yfinance](https://github.com/ranaroussi/yfinance) | Free, no key required |
 | Sector ETF prices | yfinance | SPY, XLK, XLF, etc. |

@@ -3,7 +3,8 @@
 # so the periods are comparable. The published 2022-24 figures predate the BMO/AMC entry
 # fix (7662a3c), so they cannot be compared against 2025/2026 runs directly.
 #
-# FMP's free tier caps at 250 requests/day, so one pass cannot cover every range. The disk
+# FMP's free tier capped at 250 requests/day when this was written (the key is now on Premium,
+# 750 requests/min), so one pass could not cover every range. The disk
 # cache persists, so each daily run advances coverage. Runs right after the 9:30 ET scan so
 # the live cycle gets first claim on the day's quota.
 #

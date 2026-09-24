@@ -134,7 +134,7 @@ within noise at these sample sizes (SE of the difference ≈ 1.9%/trade).
 
 Next diagnostic: replay 2025 to see whether the decay is recent, and reconcile the entry
 divergence so the backtest is a valid proxy for what production actually trades. Both are
-FMP-quota bound (the free tier is 250 requests/day).
+FMP-quota bound (at the time the key was on the free tier, 250 requests/day; it is now on Premium, 750 requests/min).
 
 ---
 
