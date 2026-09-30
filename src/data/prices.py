@@ -4,7 +4,7 @@ Price data from yfinance. All % changes are fractional (0.05 = 5%).
     get_ohlcv(ticker, days)          -> pd.DataFrame   columns: Open High Low Close Volume
     get_latest_price(ticker)         -> float          last traded price right now
     get_prior_close(ticker)          -> float          close of the last completed session
-    get_today_open(ticker)           -> float | None   today's opening print, None before it exists
+    get_today_open(ticker)           -> float | None   today's opening print (Alpaca), None before it exists
     get_atr(ticker, period=14)       -> float          Average True Range (Wilder smoothing)
     get_ah_move(ticker, date)        -> float          after-hours % move vs regular close
     get_premarket_move(ticker, date) -> float          pre-market % move vs prior regular close
@@ -87,14 +87,29 @@ def get_prior_close(ticker: str) -> float:
 
 
 def get_today_open(ticker: str) -> float | None:
-    """Today's opening print, or None if the session has not opened yet."""
-    df = get_ohlcv(ticker, days=5)
-    dates = [str(i)[:10] for i in df.index]
-    today = _today_et()
-    for d, o in zip(dates, df["Open"]):
-        if d == today:
-            return float(o)
-    return None
+    """Today's opening print, or None if the session has not opened yet.
+
+    Not from yfinance: at 9:30 its same-day daily row can still carry the previous
+    session's open (2026-09-29: KMX open 57.17 = 9/28's open, real open 60.41), so the
+    gap read ~1% instead of ~7%. Alpaca's snapshot dailyBar is used once it is dated
+    today; before that the caller falls back to the latest price.
+    """
+    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY
+
+    if not (ALPACA_API_KEY and ALPACA_SECRET_KEY):
+        return None
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockSnapshotRequest
+
+        client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+        bar = client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=ticker))[ticker].daily_bar
+    except Exception as e:
+        logger.warning(f"Alpaca snapshot failed for {ticker}: {e}")
+        return None
+    if bar is None or bar.timestamp.astimezone(EASTERN).strftime("%Y-%m-%d") != _today_et():
+        return None
+    return float(bar.open)
 
 
 def get_atr(ticker: str, period: int = 14) -> float:

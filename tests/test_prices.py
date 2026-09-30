@@ -146,20 +146,34 @@ def test_get_prior_close_when_todays_bar_is_absent():
         assert prices.get_prior_close("AAPL") == 95.0
 
 
+def _snapshot_client(bar_ts: str, bar_open: float):
+    from datetime import datetime
+    bar = MagicMock(timestamp=datetime.fromisoformat(bar_ts), open=bar_open)
+    client = MagicMock()
+    client.get_stock_snapshot.return_value = {"AAPL": MagicMock(daily_bar=bar)}
+    return client
+
+
 def test_get_today_open_returns_none_before_the_open():
+    """Before today's first trade the snapshot's dailyBar is still yesterday's."""
     from data import prices
-    bars = _dated_df([("2026-05-11", 90.0, 95.0)])
-    with patch("data.prices.get_ohlcv", return_value=bars), \
+    with patch("config.ALPACA_API_KEY", "k"), patch("config.ALPACA_SECRET_KEY", "s"), \
+         patch("alpaca.data.historical.StockHistoricalDataClient",
+               return_value=_snapshot_client("2026-05-11T04:00:00+00:00", 90.0)), \
          patch("data.prices._today_et", return_value="2026-05-12"):
         assert prices.get_today_open("AAPL") is None
 
 
 def test_get_today_open_returns_the_opening_print():
+    """Ignores yfinance's daily row, which at 9:30 can carry yesterday's open."""
     from data import prices
-    bars = _dated_df([("2026-05-11", 90.0, 95.0), ("2026-05-12", 96.0, 99.0)])
-    with patch("data.prices.get_ohlcv", return_value=bars), \
+    with patch("config.ALPACA_API_KEY", "k"), patch("config.ALPACA_SECRET_KEY", "s"), \
+         patch("alpaca.data.historical.StockHistoricalDataClient",
+               return_value=_snapshot_client("2026-05-12T04:00:00+00:00", 96.0)), \
+         patch("data.prices.get_ohlcv") as daily, \
          patch("data.prices._today_et", return_value="2026-05-12"):
         assert prices.get_today_open("AAPL") == 96.0
+    daily.assert_not_called()
 
 
 def test_get_latest_price_prefers_intraday_over_the_daily_bar():
