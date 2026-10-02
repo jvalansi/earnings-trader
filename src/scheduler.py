@@ -12,8 +12,8 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from config import TRADING_MODE, ALLOWED_EXCHANGES
 from notifier import notify, notify_thread
-from data.earnings import get_earnings_calendar_details, get_earnings_surprise
-from data.prices import get_ohlcv, get_atr, get_prior_runup, get_latest_price, get_prior_close, get_today_open
+from data.earnings import get_earnings_calendar_details, get_earnings_surprise, reacting_today
+from data.prices import get_ohlcv, get_atr, get_prior_runup, get_latest_price, get_prior_close, get_today_open, get_prior_session_date
 from data.sector import get_sector_intraday_move
 from decision import evaluate_entry, evaluate_positions
 from execution import execute_signals
@@ -92,7 +92,7 @@ def run_scan_cycle(mode: str = "paper") -> None:
     1. Increment day_count, evaluate exits and trailing stop updates for open positions
     2. Execute SELLs for positions that hit stop or max hold days
     3. Evaluate risk controls — a breach blocks new entries (exits above always run)
-    4. Fetch yesterday's (AMC) and today's (BMO) earnings calendar
+    4. Fetch reports reacting today: prior session's non-BMO and today's BMO
     5. For each ticker: fetch surprise, overnight gap, prior run-up, sector move, ATR
     6. Evaluate entry signal against all filters
     7. Execute BUY orders for passing signals
@@ -100,7 +100,6 @@ def run_scan_cycle(mode: str = "paper") -> None:
     """
     eastern_now = datetime.now(EASTERN)
     today = eastern_now.strftime("%Y-%m-%d")
-    yesterday = (eastern_now - timedelta(days=1)).strftime("%Y-%m-%d")
     logger.info(f"=== Scan Cycle: {today} ===")
 
     # --- Exit / update open positions ---
@@ -138,9 +137,10 @@ def run_scan_cycle(mode: str = "paper") -> None:
 
     # --- Scan for new entries ---
     try:
-        entries_amc = get_earnings_calendar_details(yesterday)
-        entries_bmo = get_earnings_calendar_details(today)
-        all_entries = [e for e in entries_amc + entries_bmo if e.eps_estimate is not None]
+        prior_session = get_prior_session_date()
+        calendar = get_earnings_calendar_details(prior_session, today)
+        all_entries = [e for e in reacting_today(calendar, prior_session, today)
+                       if e.eps_estimate is not None]
         entry_by_ticker = {e.ticker: e for e in all_entries}
         tickers = _filter_us_exchange([e.ticker for e in all_entries])
     except Exception as e:

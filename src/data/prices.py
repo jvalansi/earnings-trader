@@ -86,6 +86,16 @@ def get_prior_close(ticker: str) -> float:
     return float(closes[-1])
 
 
+def get_prior_session_date() -> str:
+    """Date (YYYY-MM-DD) of the last completed trading session, from SPY's daily bars."""
+    df = get_ohlcv("SPY", days=5)
+    today = _today_et()
+    dates = [str(i)[:10] for i in df.index if str(i)[:10] < today]
+    if not dates:
+        raise ValueError("No completed session in SPY history")
+    return dates[-1]
+
+
 def get_today_open(ticker: str) -> float | None:
     """Today's opening print, or None if the session has not opened yet.
 

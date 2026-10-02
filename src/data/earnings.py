@@ -5,7 +5,8 @@ Earnings data from the Financial Modeling Prep (FMP) API.
     EarningsCalendarEntry                     dataclass with ticker, date, timing, estimates
     get_earnings_surprise(ticker, date=None)  -> EarningsSurprise
     get_earnings_calendar(date, timing='amc') -> list[str]   timing: 'amc' | 'bmo'
-    get_earnings_calendar_details(date)       -> list[EarningsCalendarEntry]
+    get_earnings_calendar_details(start, end=None) -> list[EarningsCalendarEntry]
+    reacting_today(entries, prior_session, today)  -> entries whose first reaction session is today
 
 Requires env var: FMP_API_KEY
 """
@@ -19,6 +20,9 @@ from config import FMP_API_KEY
 logger = logging.getLogger(__name__)
 
 BASE_STABLE = "https://financialmodelingprep.com/stable"
+# /stable/earnings-calendar carries no 'time' field, so bmo/amc can't be told apart there.
+# The v3 calendar has it, and is what the backtest uses.
+CALENDAR_V3 = "https://financialmodelingprep.com/api/v3/earning_calendar"
 
 
 @dataclass
@@ -98,9 +102,8 @@ def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
     date format: 'YYYY-MM-DD'.
     timing: 'amc' (after market close, default), 'bmo' (before market open), or 'all'.
     """
-    url = f"{BASE_STABLE}/earnings-calendar"
     params = {"from": date, "to": date, "apikey": FMP_API_KEY}
-    resp = requests.get(url, params=params, timeout=10)
+    resp = requests.get(CALENDAR_V3, params=params, timeout=10)
     resp.raise_for_status()
     records = resp.json()
 
@@ -122,11 +125,10 @@ def get_earnings_calendar(date: str, timing: str = "amc") -> list[str]:
     return tickers
 
 
-def get_earnings_calendar_details(date: str) -> list[EarningsCalendarEntry]:
-    """Return earnings calendar entries with estimate data for all tickers on the given date."""
-    url = f"{BASE_STABLE}/earnings-calendar"
-    params = {"from": date, "to": date, "apikey": FMP_API_KEY}
-    resp = requests.get(url, params=params, timeout=10)
+def get_earnings_calendar_details(start: str, end: str | None = None) -> list[EarningsCalendarEntry]:
+    """Return earnings calendar entries with estimate data for all tickers in [start, end]."""
+    params = {"from": start, "to": end or start, "apikey": FMP_API_KEY}
+    resp = requests.get(CALENDAR_V3, params=params, timeout=10)
     resp.raise_for_status()
     records = resp.json()
 
@@ -135,7 +137,7 @@ def get_earnings_calendar_details(date: str) -> list[EarningsCalendarEntry]:
         symbol = r.get("symbol", "")
         if not symbol:
             continue
-        time_val = r.get("time", "").lower()
+        time_val = (r.get("time") or "").lower()
         if time_val == "bmo":
             timing = "bmo"
         elif time_val == "amc":
@@ -146,11 +148,22 @@ def get_earnings_calendar_details(date: str) -> list[EarningsCalendarEntry]:
         rev_est = r.get("revenueEstimated")
         entries.append(EarningsCalendarEntry(
             ticker=symbol.upper(),
-            date=date,
+            date=r.get("date") or start,
             timing=timing,
             eps_estimate=float(eps_est) if eps_est is not None else None,
             rev_estimate=float(rev_est) if rev_est is not None else None,
         ))
 
-    logger.info(f"Earnings calendar details for {date}: {len(entries)} entries")
+    logger.info(f"Earnings calendar details for {start}..{end or start}: {len(entries)} entries")
     return entries
+
+
+def reacting_today(entries: list[EarningsCalendarEntry], prior_session: str,
+                   today: str) -> list[EarningsCalendarEntry]:
+    """Entries whose first reaction session is today, matching the backtest's timing branch:
+    bmo reports react the same day; everything else (amc, dmh, unknown) reacts the next
+    session, so it reacts today if dated on/after the prior session and before today.
+    """
+    return [e for e in entries
+            if (e.timing == "bmo" and e.date == today)
+            or (e.timing != "bmo" and prior_session <= e.date < today)]

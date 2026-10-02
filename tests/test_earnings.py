@@ -75,3 +75,19 @@ def test_get_earnings_calendar_bmo():
 def test_get_earnings_calendar_empty():
     with patch("data.earnings.requests.get", return_value=_mock_response([])):
         assert get_earnings_calendar("2026-01-15") == []
+
+
+# --- reacting_today ---
+
+def test_reacting_today_matches_backtest_timing():
+    from data.earnings import EarningsCalendarEntry, reacting_today
+    e = lambda t, d, tm: EarningsCalendarEntry(t, d, tm, 1.0, 1.0)
+    cal = [e("JBL", "2026-09-30", "bmo"),     # reacted 9/30, not on 10/01
+           e("BSET", "2026-09-30", "amc"),    # reacts 10/01
+           e("UNK", "2026-09-30", "unknown"), # unknown → treated as amc, like the backtest
+           e("MKC", "2026-10-01", "bmo"),     # reacts 10/01
+           e("ACN", "2026-10-01", "amc")]     # reacts 10/02
+    assert [x.ticker for x in reacting_today(cal, "2026-09-30", "2026-10-01")] == ["BSET", "UNK", "MKC"]
+    # Monday: Friday's amc reacts today
+    fri = [e("A", "2026-09-25", "amc"), e("B", "2026-09-25", "bmo")]
+    assert [x.ticker for x in reacting_today(fri, "2026-09-25", "2026-09-28")] == ["A"]
