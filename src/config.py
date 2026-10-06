@@ -52,4 +52,4 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets
 # 'live'  -> real money; additionally requires LIVE_TRADING_CONFIRMED=yes and Alpaca keys
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")
 LIVE_TRADING_CONFIRMED = os.getenv("LIVE_TRADING_CONFIRMED", "").lower() in ("yes", "true", "1")
-ORDER_FILL_TIMEOUT_SEC = float(os.getenv("ORDER_FILL_TIMEOUT_SEC", "30"))  # how long to poll for a fill
+ORDER_FILL_TIMEOUT_SEC = float(os.getenv("ORDER_FILL_TIMEOUT_SEC", "300"))  # how long to poll for a fill; paper market orders at the open took ~3.5 min (2026-10-06)

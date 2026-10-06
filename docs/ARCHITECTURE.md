@@ -229,7 +229,8 @@ def execute_signals(
 
 Logs every order to `data/trades_log.jsonl` with the intended price, the actual fill and
 the resulting slippage. Orders are submitted to Alpaca and polled until they fill or
-`ORDER_FILL_TIMEOUT_SEC` expires; a position is only recorded once the fill is confirmed,
+`ORDER_FILL_TIMEOUT_SEC` expires (an order still open then is cancelled, and any fill that
+raced the cancel is still recorded); a position is only recorded once the fill is confirmed,
 and a failed exit keeps the position open so the next cycle retries it.
 
 Modes: `live` (real money — requires keys and `LIVE_TRADING_CONFIRMED`, never degrades

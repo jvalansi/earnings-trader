@@ -118,6 +118,16 @@ def test_place_order_unfilled_order_is_not_success(with_broker):
     assert "rejected" in result.error
 
 
+def test_place_order_timeout_cancels_and_records_racing_fill(with_broker, monkeypatch):
+    monkeypatch.setattr(execution, "ORDER_FILL_TIMEOUT_SEC", 0)
+    with_broker.submit_order.return_value = _alpaca_order(status="new", filled_qty="0", filled_avg_price=None)
+    with_broker.get_order_by_id.return_value = _alpaca_order(status="filled", filled_avg_price="100.5")
+    with patch("execution.time.sleep"):
+        result = place_order("AAPL", "buy", 10, fill_price=100.0, mode="paper")
+    with_broker.cancel_order_by_id.assert_called_once_with("abc")
+    assert result.success is True and result.fill_price == 100.5
+
+
 def test_place_order_broker_exception_is_captured(with_broker):
     with_broker.submit_order.side_effect = RuntimeError("connection reset")
     result = place_order("AAPL", "buy", 10, fill_price=100.0, mode="paper")

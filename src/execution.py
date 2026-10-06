@@ -136,6 +136,19 @@ def _place_alpaca_order(
         while order.status.value not in _TERMINAL_STATUSES and time.monotonic() < deadline:
             time.sleep(1)
             order = client.get_order_by_id(order.id)
+        if order.status.value not in _TERMINAL_STATUSES:
+            # Don't leave a live order behind: it would fill later with no position in state.
+            # Cancel, then re-read so a fill that raced the cancel is still recorded.
+            try:
+                client.cancel_order_by_id(order.id)
+            except Exception as e:
+                logger.warning(f"[ALPACA {mode.upper()}] cancel of unfilled {ticker} order failed: {e}")
+            cancel_deadline = time.monotonic() + 10
+            while True:
+                order = client.get_order_by_id(order.id)
+                if order.status.value in _TERMINAL_STATUSES or time.monotonic() >= cancel_deadline:
+                    break
+                time.sleep(1)
 
         status = order.status.value
         filled_qty = float(order.filled_qty or 0)
