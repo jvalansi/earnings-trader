@@ -78,7 +78,12 @@ def test_reconcile_detects_drift(client):
     drift = broker.reconcile([_position("AAPL", 10), _position("TSLA", 2)])
     assert drift["only_local"] == ["TSLA"]
     assert drift["only_broker"] == ["MSFT"]
-    assert drift["qty_mismatch"] == ["AAPL: local 10 vs broker 5"]
+    assert drift["qty_mismatch"] == ["AAPL: local 10 vs broker 5.0"]
+
+
+def test_reconcile_matches_fractional_quantities(client):
+    client.get_all_positions.return_value = [_remote("LW", "10.350196159")]
+    assert not any(broker.reconcile([_position("LW", 10.350196159)]).values())
 
 
 def test_reconcile_ignores_simulated_positions(client):

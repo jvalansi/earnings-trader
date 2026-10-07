@@ -112,7 +112,7 @@ def broker_positions(mode: str = "paper") -> dict[str, dict]:
         return {}
     client = _client(paper=(resolve_mode(mode) == "paper"))
     return {
-        p.symbol: {"qty": int(float(p.qty)), "avg_entry_price": float(p.avg_entry_price)}
+        p.symbol: {"qty": float(p.qty), "avg_entry_price": float(p.avg_entry_price)}  # fractional: entries are notional
         for p in client.get_all_positions()
     }
 
@@ -133,7 +133,7 @@ def reconcile(local_positions, mode: str = "paper") -> dict:
     qty_mismatch = sorted(
         f"{t}: local {local[t].quantity} vs broker {remote[t]['qty']}"
         for t in set(local) & set(remote)
-        if local[t].quantity != remote[t]["qty"]
+        if abs(local[t].quantity - remote[t]["qty"]) > 1e-6
     )
     return {"only_local": only_local, "only_broker": only_broker, "qty_mismatch": qty_mismatch}
 
