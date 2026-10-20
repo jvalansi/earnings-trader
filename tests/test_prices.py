@@ -194,3 +194,15 @@ def test_get_latest_price_falls_back_to_daily_bar():
     with patch("data.prices.yf.Ticker", return_value=ticker), \
          patch("data.prices.get_ohlcv", return_value=_daily_df([100.0, 102.0])):
         assert prices.get_latest_price("AAPL") == 102.0
+
+
+def test_prior_runup_excludes_todays_partial_bar():
+    # Eleven flat sessions then today's +20% reaction: the run-up must not see today
+    idx = pd.date_range(end="2026-10-20", periods=12, freq="D")
+    closes = [100.0] * 11 + [120.0]
+    df = pd.DataFrame({"Open": closes, "High": closes, "Low": closes, "Close": closes,
+                       "Volume": [1] * 12}, index=idx)
+    with patch("data.prices.yf.Ticker", return_value=_mock_ticker(daily=df)), \
+         patch("data.prices._today_et", return_value="2026-10-20"):
+        assert get_prior_runup("X") == pytest.approx(0.0)
+        assert get_atr("X") == pytest.approx(0.0)

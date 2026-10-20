@@ -5,10 +5,10 @@ Price data from yfinance. All % changes are fractional (0.05 = 5%).
     get_latest_price(ticker)         -> float          last traded price right now
     get_prior_close(ticker)          -> float          close of the last completed session
     get_today_open(ticker)           -> float | None   today's opening print (Alpaca), None before it exists
-    get_atr(ticker, period=14)       -> float          Average True Range (Wilder smoothing)
+    get_atr(ticker, period=14)       -> float          Average True Range (Wilder smoothing), completed sessions only
     get_ah_move(ticker, date)        -> float          after-hours % move vs regular close
     get_premarket_move(ticker, date) -> float          pre-market % move vs prior regular close
-    get_prior_runup(ticker, days=10) -> float          % change over prior N trading days
+    get_prior_runup(ticker, days=10) -> float          % change over prior N completed trading days (today excluded)
 
 Note: yfinance 1m data (used by get_ah_move / get_premarket_move) is only available
 for the past 7 days.
@@ -122,9 +122,19 @@ def get_today_open(ticker: str) -> float | None:
     return float(bar.open)
 
 
+def _completed_sessions(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop today's bar. During the session yfinance already has a partial row for today,
+    so a 9:30 scan would fold the earnings reaction into "prior" run-up and ATR; the
+    backtest measures both as of the session before the reaction (HAS 2026-10-20:
+    run-up 15.3% with today's bar vs 8.2% without)."""
+    return df[df.index.strftime("%Y-%m-%d") < _today_et()]
+
+
 def get_atr(ticker: str, period: int = 14) -> float:
-    """Return the most recent Average True Range value (Wilder smoothing)."""
-    df = get_ohlcv(ticker, days=period + 10)
+    """Return the most recent Average True Range value (Wilder smoothing), completed sessions only."""
+    df = _completed_sessions(get_ohlcv(ticker, days=period + 11))
+    if len(df) < 2:
+        raise ValueError(f"Not enough price history for {ticker}")
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
@@ -211,11 +221,11 @@ def get_premarket_move(ticker: str, date: str) -> float:
 
 
 def get_prior_runup(ticker: str, days: int = LOOKBACK_DAYS) -> float:
-    """Return the % price change over the prior N trading days.
+    """Return the % price change over the prior N completed trading days (today excluded).
 
     Returns fractional change, e.g. 0.08 = +8%.
     """
-    df = get_ohlcv(ticker, days=days + 5)
+    df = _completed_sessions(get_ohlcv(ticker, days=days + 5))
     closes = df["Close"].tail(days)
     if len(closes) < 2:
         raise ValueError(f"Not enough price history for {ticker}")
