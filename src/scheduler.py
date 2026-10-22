@@ -149,6 +149,10 @@ def run_scan_cycle(mode: str = "paper") -> None:
         entry_by_ticker = {}
 
     signals = []
+    # Accepted entries take a slot before the next ticker is evaluated, as in the
+    # backtest; against the start-of-scan book alone a busy day overshot MAX_POSITIONS
+    # (2026-10-22: 8 held + 5 entries = 13 of 10).
+    book = list(open_positions)
     for ticker in tickers:
         try:
             entry_date = entry_by_ticker[ticker].date if ticker in entry_by_ticker else today
@@ -171,9 +175,11 @@ def run_scan_cycle(mode: str = "paper") -> None:
                 sector_move=sector_move,
                 atr=atr,
                 current_price=current_price,
-                open_positions=open_positions,
+                open_positions=book,
             )
             signals.append(sig)
+            if sig.should_enter:
+                book.append(ticker)
             logger.info(
                 f"{ticker}: should_enter={sig.should_enter}, gap={overnight_gap:.1%} "
                 f"(open {today_open}, prior close {prior_close:.2f}, now {current_price:.2f}), "
